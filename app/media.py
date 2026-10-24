@@ -1,5 +1,6 @@
 """Utilidades de FFmpeg: análisis de medios, proxies, forma de onda y ejecución con progreso."""
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -26,7 +27,8 @@ def probe(path: str | Path) -> dict:
     streams = info.get("streams", [])
     v = next((s for s in streams if s.get("codec_type") == "video"
               and not s.get("disposition", {}).get("attached_pic")), None)
-    a = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    audios = [s for s in streams if s.get("codec_type") == "audio"]
+    a = audios[0] if audios else None
     ext = Path(path).suffix.lower()
     dur = float(info.get("format", {}).get("duration") or 0)
     if v is None and a is None:
@@ -63,7 +65,41 @@ def probe(path: str | Path) -> dict:
     return {"kind": kind, "duration": round(dur, 3), "width": w, "height": h,
             "fps": round(fps, 3), "has_audio": a is not None,
             "vcodec": (v or {}).get("codec_name"), "pix_fmt": (v or {}).get("pix_fmt"),
-            "acodec": (a or {}).get("codec_name"), "rotated": rot == 90}
+            "acodec": (a or {}).get("codec_name"), "channels": (a or {}).get("channels"),
+            "rotated": rot == 90,
+            "audio_streams": len(audios)}
+
+
+SILENCE_DB = -55.0   # pico por debajo de este nivel = pista sin sonido útil
+
+
+def analyze_audio(path: str | Path, n_streams: int, seconds: int = 900) -> dict:
+    """Mide el pico de cada pista de audio (primeros 15 min) y decide cuáles usar.
+
+    Caso típico que resuelve: grabaciones de OBS u otras con varias pistas, donde la
+    primera va vacía y la voz está en la segunda. Devuelve:
+      audio_map: índices de las pistas con sonido (todas, si ninguna lo tiene)
+      silent:    True si todas las pistas están en silencio
+      peaks:     pico en dB por pista
+    """
+    peaks = []
+    for k in range(n_streams):
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-t", str(seconds),
+                              "-i", str(path), "-map", f"0:a:{k}", "-af", "volumedetect",
+                              "-f", "null", "-"], capture_output=True, text=True, timeout=900)
+        m = re.search(r"max_volume:\s*(-?[\d.]+|-inf) dB", out.stderr)
+        peaks.append(-120.0 if not m or m.group(1) == "-inf" else float(m.group(1)))
+    useful = [k for k, pk in enumerate(peaks) if pk > SILENCE_DB]
+    return {"audio_map": useful or list(range(n_streams)),
+            "silent": n_streams > 0 and not useful, "peaks": peaks}
+
+
+def audio_filter(input_idx: int | str, audio_map: list[int], out_label: str) -> str | None:
+    """Filtro que combina las pistas elegidas en una sola (None si basta mapear una)."""
+    if len(audio_map) <= 1:
+        return None
+    ins = "".join(f"[{input_idx}:a:{k}]" for k in audio_map)
+    return f"{ins}amix=inputs={len(audio_map)}:normalize=1:dropout_transition=0[{out_label}]"
 
 
 def _decode_duration(path) -> float:
@@ -110,7 +146,10 @@ def make_proxy(media_id: str, src: str, info: dict,
     """Proxy liviano para el navegador: H.264 ≤720p, GOP de 1 s (búsqueda ágil)."""
     if info["kind"] == "audio":
         dst = PROXY_DIR / f"{media_id}.m4a"
-        run_ffmpeg(["-i", src, "-vn", "-c:a", "aac", "-b:a", "128k",
+        amap = info.get("audio_map") or [0]
+        mix = audio_filter(0, amap, "amix")
+        sel = ["-filter_complex", mix, "-map", "[amix]"] if mix else ["-map", f"0:a:{amap[0]}"]
+        run_ffmpeg(["-i", src, *sel, "-c:a", "aac", "-b:a", "128k", "-ac", "2",
                     "-movflags", "+faststart", str(dst)], info["duration"], on_progress)
         return str(dst)
     if info["kind"] == "image":
@@ -122,23 +161,35 @@ def make_proxy(media_id: str, src: str, info: dict,
     # Vía rápida: si el archivo ya es H.264 4:2:0 ≤1080p con audio AAC/MP3 (lo habitual en
     # celulares, cámaras y OBS), el navegador lo reproduce tal cual: solo se re-empaqueta
     # (segundos en lugar de minutos).
-    if (info.get("vcodec") == "h264" and info.get("pix_fmt") in ("yuv420p", "yuvj420p")
-            and info["height"] <= 1080 and not info.get("rotated")
-            and info.get("acodec") in (None, "aac", "mp3")):
+    amap = info.get("audio_map", [0] if info.get("has_audio") else [])
+    mix = audio_filter(0, amap, "amix")
+    if mix:
+        a_args = ["-filter_complex", mix, "-map", "[amix]", "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+    elif amap:
+        a_args = ["-map", f"0:a:{amap[0]}", "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+    else:
+        a_args = ["-an"]
+    video_ok = (info.get("vcodec") == "h264" and info.get("pix_fmt") in ("yuv420p", "yuvj420p")
+                and info["height"] <= 1080 and not info.get("rotated"))
+    if video_ok:
+        # El audio se copia tal cual solo si es una única pista AAC/MP3 en estéreo o mono
+        if not mix and amap and info.get("acodec") in ("aac", "mp3") and (info.get("channels") or 2) <= 2:
+            a_fast = ["-map", f"0:a:{amap[0]}", "-c:a", "copy"]
+        else:
+            a_fast = a_args
         try:
-            run_ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+            run_ffmpeg(["-i", src, "-map", "0:v:0", "-c:v", "copy", *a_fast,
                         "-movflags", "+faststart", str(dst)], info["duration"], on_progress)
             return str(dst)
         except FFmpegError:
             dst.unlink(missing_ok=True)
     fps = info["fps"] or 30
     gop = max(1, round(fps))
-    args = ["-i", src, "-map", "0:v:0", "-map", "0:a:0?",
+    args = ["-i", src, "-map", "0:v:0",
             "-vf", "scale=-2:'min(720,ih)',format=yuv420p",
             "-c:v", "libx264", "-preset", "superfast", "-crf", "27", "-threads", "0",
             "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0",
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2",
-            "-movflags", "+faststart", str(dst)]
+            *a_args, "-movflags", "+faststart", str(dst)]
     run_ffmpeg(args, info["duration"], on_progress)
     return str(dst)
 

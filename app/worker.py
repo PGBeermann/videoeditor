@@ -11,6 +11,7 @@ import signal
 import threading
 import time
 import traceback
+from pathlib import Path
 
 from . import config, db, media, transcribe
 from .render import Renderer, cleanup
@@ -56,22 +57,30 @@ def do_ingest(job, prog: Progress) -> dict:
         raise RuntimeError("El medio ya no existe")
     prog(0.02, "Analizando archivo")
     info = media.probe(m["path"])
-    db.ex("UPDATE media SET kind=?, duration=?, width=?, height=?, fps=?, has_audio=? WHERE id=?",
+    info["audio_map"], silent = [], False
+    if info["has_audio"]:
+        prog(0.03, "Analizando pistas de audio")
+        an = media.analyze_audio(m["path"], info["audio_streams"])
+        info["audio_map"], silent = an["audio_map"], an["silent"]
+        print(f"[worker] audio {m['filename']}: pistas={info['audio_streams']} "
+              f"picos={an['peaks']} usadas={an['audio_map']} silencio={silent}", flush=True)
+    db.ex("UPDATE media SET kind=?, duration=?, width=?, height=?, fps=?, has_audio=?, "
+          "audio_map=?, audio_silent=? WHERE id=?",
           info["kind"], info["duration"], info["width"], info["height"], info["fps"],
-          int(info["has_audio"]), m["id"])
+          int(info["has_audio"]), db.jdump(info["audio_map"]), int(silent), m["id"])
     proxy = media.make_proxy(m["id"], m["path"], info,
                              lambda f: prog(0.05 + 0.85 * f, "Creando versión de vista previa"))
     wave = None
     if info["has_audio"]:
         prog(0.92, "Dibujando forma de onda")
-        wave = media.make_waveform(m["id"], m["path"])
+        wave = media.make_waveform(m["id"], proxy if info["kind"] != "image" else m["path"])
     db.ex("UPDATE media SET proxy_path=?, waveform_path=?, status='ready' WHERE id=?",
           proxy, wave, m["id"])
     params = db.jload(job["params"], {})
     if params.get("auto_transcribe") and info["has_audio"] and info["kind"] in ("video", "audio"):
         db.enqueue("transcribe", job["project_id"], m["id"],
                    {"language": params.get("language", "es")})
-    return {"media": m["id"], **info}
+    return {"media": m["id"], "silent": silent, **info}
 
 
 def do_transcribe(job, prog: Progress) -> dict:
@@ -80,7 +89,9 @@ def do_transcribe(job, prog: Progress) -> dict:
         raise RuntimeError("El medio ya no existe")
     params = db.jload(job["params"], {})
     prog(0.01, f"Cargando modelo Whisper «{config.WHISPER_MODEL}» (la primera vez se descarga)")
-    res = transcribe.transcribe(m["path"], m["duration"], params.get("language", "es"),
+    # Se transcribe desde la vista previa: su audio ya combina las pistas con sonido
+    src = m["proxy_path"] if m["proxy_path"] and Path(m["proxy_path"]).exists() else m["path"]
+    res = transcribe.transcribe(src, m["duration"], params.get("language", "es"),
                                 bool(params.get("translate")), prog)
     db.ex("INSERT INTO transcripts(media_id, language, words, translated, created_at) "
           "VALUES (?,?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET language=excluded.language, "
@@ -100,7 +111,8 @@ def do_render(job, prog: Progress) -> dict:
     rows = db.q("SELECT * FROM media WHERE project_id=? AND status='ready'", p["id"])
     media_map = {r["id"]: dict(r) for r in rows}
     for r in media_map.values():
-        r["has_audio"] = bool(r["has_audio"])
+        r["audio_map"] = db.audio_map_of(r)
+        r["has_audio"] = bool(r["has_audio"]) and bool(r["audio_map"])
     assets = {r["id"]: r["path"] for r in
               db.q("SELECT id, path FROM assets WHERE project_id=?", p["id"])}
     transcripts, translations = {}, {}
@@ -177,6 +189,12 @@ def main() -> None:
           "finished_at=? WHERE status='running'", db.now())
     db.ex("UPDATE media SET status='error' WHERE status='processing' AND id NOT IN "
           "(SELECT media_id FROM jobs WHERE type='ingest' AND status='queued' AND media_id IS NOT NULL)")
+    # Medios subidos antes del análisis de pistas: se reprocesan una vez para elegir
+    # la pista de audio con sonido (p. ej., grabaciones con la primera pista vacía)
+    for r in db.q("SELECT id, project_id FROM media WHERE status='ready' AND has_audio=1 "
+                  "AND audio_map IS NULL AND kind IN ('video','audio')"):
+        if not db.q1("SELECT 1 FROM jobs WHERE media_id=? AND type='ingest' AND status='queued'", r["id"]):
+            db.enqueue("ingest", r["project_id"], r["id"], {"reanalyze": True})
     print(f"[worker] listo (pid {os.getpid()}), carriles: {', '.join(LANES)}; "
           f"modelo Whisper: {config.WHISPER_MODEL}", flush=True)
     threads = [threading.Thread(target=lane_loop, args=(n, t), name=n, daemon=True)

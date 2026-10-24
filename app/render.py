@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import captions, config
-from .media import FFmpegError, run_ffmpeg
+from .media import FFmpegError, audio_filter, run_ffmpeg
 
 CHUNK = 40
 FORMATS = {"16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080)}
@@ -90,7 +90,14 @@ class Renderer:
             if m["kind"] == "video" and m["has_audio"] and not c.get("mute"):
                 gain = float(c.get("gain_db", 0) or 0)
                 fade = min(0.012, dur / 4)
-                fl.append(f"[{vi}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
+                amap = m.get("audio_map") or [0]
+                mix = audio_filter(vi, amap, f"am{vi}")
+                if mix:
+                    fl.append(mix)
+                    a_in = f"[am{vi}]"
+                else:
+                    a_in = f"[{vi}:a:{amap[0]}]"
+                fl.append(f"{a_in}aformat=sample_rates=48000:channel_layouts=stereo,"
                           f"volume={_f(gain)}dB,apad,atrim=0:{_f(dur)},asetpts=PTS-STARTPTS,"
                           f"afade=t=in:d={_f(fade)},afade=t=out:st={_f(dur - fade)}:d={_f(fade)}"
                           f"[a{vi}]")

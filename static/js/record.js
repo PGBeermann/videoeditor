@@ -156,6 +156,7 @@ function meter() {
   const buf = new Float32Array(R.analyser.fftSize); R.analyser.getFloatTimeDomainData(buf);
   let peak = 0; for (const v of buf) peak = Math.max(peak, Math.abs(v));
   const db = 20 * Math.log10(peak || 1e-6);
+  if (R.state === 'rec') R.recPeak = Math.max(R.recPeak ?? -120, db);
   $('#meter').style.width = clamp((db + 60) / 60 * 100, 0, 100) + '%';
 }
 
@@ -224,6 +225,8 @@ async function countdown() {
 }
 $('#btnRec').onclick = async () => {
   const m = mode();
+  if (!R.micNode && !confirm('No hay micrófono activo: la grabación quedará sin voz. ¿Grabar de todas formas?')) return;
+  R.recPeak = -120;
   if ((m === 'screen' || m === 'screencam') && !R.screen) { await pickScreen(); if (!R.screen) return; }
   if (R.audioCtx.state === 'suspended') await R.audioCtx.resume();
   await countdown();
@@ -240,6 +243,7 @@ $('#btnRec').onclick = async () => {
     const ext = (R.blob.type.includes('mp4') ? 'mp4' : 'webm');
     $('#btnSaveLocal').href = url; $('#btnSaveLocal').download = `grabacion.${ext}`;
     setState('review');
+    if (R.micNode && R.recPeak < -50) toast('No se detectó sonido del micrófono durante la grabación. Revise el micrófono elegido y los permisos del navegador antes de usar esta toma.', true, 12000);
   };
   R.recorder.start(1000);
   R.startAt = performance.now(); R.pausedMs = 0;

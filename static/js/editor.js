@@ -244,6 +244,8 @@ function addMediaToTimeline(m, where = 'playhead') {
     toast('Música añadida (pista «Música»)');
     return;
   }
+  if (m.kind === 'video' && !m.has_audio) toast(`«${m.filename}» no tiene audio: se añadirá en silencio.`, true, 6000);
+  else if (m.audio_silent) toast(`El audio de «${m.filename}» está en silencio (posible problema de micrófono).`, true, 6000);
   const dur = m.kind === 'image' ? (m._dur || 5) : m.duration;
   const clip = { id: uid(), media_id: m.id, in: 0, out: dur, fit: 'contain' };
   const t = where === 'start' ? 0 : where === 'end' ? duration() : S.t;
@@ -334,7 +336,16 @@ async function startSegment() {
   const m = S.media[loc.clip.media_id];
   if (m && m.kind === 'image') { await showFrame(loc); S.segClock = performance.now() - (S.t - loc.start) * 1000 / rate(); return; }
   await showFrame(loc);
-  if (S.playing && S.segIdx === loc.i) { vid.playbackRate = rate(); vid.play().catch(() => { }); }
+  if (S.playing && S.segIdx === loc.i) {
+    vid.playbackRate = rate();
+    vid.play().catch(err => {
+      if (err && err.name === 'NotAllowedError') {
+        // El navegador bloqueó el sonido automático: se reproduce sin sonido y se avisa
+        vid.muted = true; vid.play().catch(() => { });
+        toast('El navegador bloqueó el sonido. Haga clic en la página y vuelva a reproducir.', true, 6000);
+      }
+    });
+  }
 }
 function rate() { return parseFloat($('#rate').value) || 1; }
 function tick() {
@@ -885,6 +896,13 @@ function renderMedia() {
     else if (job && job.type === 'transcribe') status = el('span', { class: 'badge warn' }, job.status === 'running' ? `Transcribiendo ${Math.round(job.progress * 100)}%` : 'Transcripción en cola');
     else if (tx) status = el('span', { class: 'badge ok', title: 'Idioma: ' + tx.language }, 'Transcrito' + (tx.translated ? ' + EN' : ''));
     else status = null;
+    let audioBadge = null;
+    if (m.status === 'ready' && m.kind === 'video' && !m.has_audio)
+      audioBadge = el('span', { class: 'badge err', title: 'El archivo no contiene ninguna pista de audio' }, 'Sin audio');
+    else if (m.status === 'ready' && m.audio_silent)
+      audioBadge = el('span', { class: 'badge err', title: 'Las pistas de audio están en silencio: revise el micrófono con que se grabó' }, 'Audio en silencio');
+    else if (m.status === 'ready' && m.audio_tracks > 1)
+      audioBadge = el('span', { class: 'badge', title: 'Se combinaron las pistas de audio que tienen sonido' }, `${m.audio_tracks} pistas`);
     const dur = m.kind === 'image' ? 'Imagen' : fmtTime(m.duration);
     const actions = el('div', { class: 'row', style: { gap: '2px' } });
     if (canEdit() && m.status === 'ready') {
@@ -901,7 +919,7 @@ function renderMedia() {
     } }, '×'));
     const item = el('div', { class: 'mitem', ondblclick: () => canEdit() && addMediaToTimeline(m) }, thumb,
       el('div', { style: { minWidth: 0 } }, el('div', { class: 'nm', title: m.filename }, m.filename),
-        el('div', { class: 'sub row', style: { gap: '6px' } }, el('span', {}, dur + (m.width ? ` · ${m.width}×${m.height}` : '')), status)),
+        el('div', { class: 'sub row wrap', style: { gap: '6px' } }, el('span', {}, dur + (m.width ? ` · ${m.width}×${m.height}` : '')), status, audioBadge)),
       actions);
     box.append(item);
   }

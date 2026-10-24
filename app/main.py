@@ -217,6 +217,8 @@ def _media_out(r) -> dict:
                            "status", "created_at")}
     d["has_audio"] = bool(r["has_audio"])
     d["has_waveform"] = bool(r["waveform_path"])
+    d["audio_silent"] = bool(r["audio_silent"]) if "audio_silent" in r.keys() else False
+    d["audio_tracks"] = len(db.audio_map_of(r))
     return d
 
 

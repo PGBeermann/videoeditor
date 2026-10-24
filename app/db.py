@@ -143,8 +143,30 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+MIGRATIONS = [
+    ("media", "audio_map", "TEXT"),                         # pistas de audio a usar, JSON
+    ("media", "audio_silent", "INTEGER NOT NULL DEFAULT 0"),
+]
+
+
 def init_db() -> None:
-    connect().executescript(SCHEMA)
+    conn = connect()
+    conn.executescript(SCHEMA)
+    for table, col, decl in MIGRATIONS:
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass   # otra instancia la agregó al mismo tiempo
+
+
+def audio_map_of(row) -> list[int]:
+    """Pistas de audio a usar para un medio (compatibilidad con filas antiguas)."""
+    m = jload(row["audio_map"], None) if "audio_map" in row.keys() else None
+    if isinstance(m, list):
+        return [int(x) for x in m]
+    return [0] if row["has_audio"] else []
 
 
 @contextmanager
