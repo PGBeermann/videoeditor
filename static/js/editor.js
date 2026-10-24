@@ -149,6 +149,20 @@ function computeWords() {
     });
     t0 += dur;
   }
+  // Narraciones de la pista «Audio»: también generan subtítulos y se editan por texto
+  const T = t0;
+  for (const mu of D().music) {
+    if (mu.role !== 'voice') continue;
+    const words = S.transcripts[mu.media_id] || [], cin = mu.in || 0, cout = mu.out ?? 1e9;
+    words.forEach((w, idx) => {
+      const mid = (w.s + w.e) / 2;
+      if (mid >= cin && mid <= cout) {
+        const s = mu.start + Math.max(0, w.s - cin), e = mu.start + Math.min(cout, w.e) - cin;
+        if (s < T) out.push({ w: w.w, s, e: Math.min(T, Math.max(e, s + 0.05)), p: w.p ?? 1, mid: mu.media_id, idx, clipId: 'mu:' + mu.id });
+      }
+    });
+  }
+  out.sort((a, b) => a.s - b.s);
   S.words = out; S.cues = buildCues(out);
 }
 function buildCues(words) {
@@ -209,10 +223,49 @@ function rippleItems(data, a, b, delta) {
     return o.end - o.start >= 0.1;
   });
   data.overlays = span(data.overlays); data.zooms = span(data.zooms);
-  for (const m of data.music) { if (m.start >= b) m.start -= d; else if (m.start > a) { m.in = (m.in || 0) + (b - m.start); m.start = a; } }
+  const kept = [];
+  for (const m of data.music) {
+    const len = (m.out ?? S.media[m.media_id]?.duration ?? 0) - (m.in || 0), e = m.start + len;
+    if (m.role === 'voice') {
+      if (e <= a + 1e-6) { kept.push(m); continue; }
+      if (m.start >= b - 1e-6) { m.start -= d; kept.push(m); continue; }
+      if (m.start < a) kept.push({ ...m, out: (m.in || 0) + (a - m.start) });
+      if (e > b) kept.push({ ...m, id: m.start < a ? uid() : m.id, in: (m.in || 0) + (b - m.start), start: a });
+    } else {
+      if (m.start >= b) m.start -= d; else if (m.start > a) { m.in = (m.in || 0) + (b - m.start); m.start = a; }
+      kept.push(m);
+    }
+  }
+  data.music = kept.filter(m => (m.out ?? S.media[m.media_id]?.duration ?? 1) - (m.in || 0) >= 0.05);
   for (const k of [...data.chapters, ...data.quizzes]) { if (k.t >= b) k.t -= d; else if (k.t > a) k.t = a; }
 }
+function audioAt(t) {
+  return D().music.find(m => { const len = (m.out ?? S.media[m.media_id]?.duration ?? 0) - (m.in || 0); return t > m.start + 0.05 && t < m.start + len - 0.05; });
+}
+/* Divide lo seleccionado (audio, capa o zoom) en el cabezal; si no hay selección, el clip de video
+   bajo el cabezal; y si no hay video en ese punto, el audio. */
 function splitAt(t) {
+  const sk = S.sel && S.sel.kind;
+  if (sk === 'music') {
+    const mu = D().music.find(x => x.id === S.sel.id);
+    const len = mu ? (mu.out ?? S.media[mu.media_id]?.duration ?? 0) - (mu.in || 0) : 0;
+    if (!mu || t <= mu.start + 0.05 || t >= mu.start + len - 0.05) { toast('Ubique el cabezal dentro del audio seleccionado para dividirlo'); return; }
+    const nid = uid();
+    change(d => { const m = d.music.find(x => x.id === mu.id), cut = (m.in || 0) + (t - m.start); d.music.push({ ...m, id: nid, in: cut, start: t }); m.out = cut; });
+    select('music', nid); return;
+  }
+  if (sk === 'overlay' || sk === 'zoom') {
+    const coll = sk === 'overlay' ? 'overlays' : 'zooms', it = D()[coll].find(x => x.id === S.sel.id);
+    if (!it || t <= it.start + 0.1 || t >= it.end - 0.1) { toast('Ubique el cabezal dentro del elemento seleccionado'); return; }
+    const nid = uid();
+    change(d => { const o = d[coll].find(x => x.id === it.id); d[coll].push({ ...JSON.parse(JSON.stringify(o)), id: nid, start: t }); o.end = t; });
+    select(sk, nid); return;
+  }
+  const loc0 = locate(t);
+  if (!loc0 || t - loc0.start < 0.05 || loc0.end - t < 0.05) {
+    const au = audioAt(t);
+    if (au) { S.sel = { kind: 'music', id: au.id }; splitAt(t); return; }
+  }
   const loc = locate(t);
   if (!loc || t - loc.start < 0.05 || loc.end - t < 0.05) { toast('Ubique el cabezal dentro de un clip para dividirlo'); return; }
   change(data => {
@@ -237,11 +290,19 @@ function insertClipAt(t, clip) {
   });
 }
 
-function addMediaToTimeline(m, where = 'playhead') {
-  if (m.status !== 'ready') { S.pendingAdd.push({ mid: m.id, at: where }); toast('Se añadirá cuando termine de procesarse'); return; }
+function addMediaToTimeline(m, where = 'playhead', role = 'voice') {
+  if (m.status !== 'ready') { S.pendingAdd.push({ mid: m.id, at: where, role }); toast('Se añadirá cuando termine de procesarse'); return; }
   if (m.kind === 'audio') {
-    change(data => data.music.push({ id: uid(), media_id: m.id, start: where === 'start' ? 0 : S.t, in: 0, out: m.duration, volume: 0.22, duck: true }));
-    toast('Música añadida (pista «Música»)');
+    const id = uid();
+    const item = role === 'voice'
+      ? { id, media_id: m.id, role: 'voice', start: where === 'start' ? 0 : S.t, in: 0, out: m.duration, volume: 1, duck: false }
+      : { id, media_id: m.id, role: 'music', start: where === 'start' ? 0 : S.t, in: 0, out: m.duration, volume: 0.22, duck: true };
+    change(data => data.music.push(item));
+    S.sel = { kind: 'music', id }; renderAll();
+    if (m.audio_silent) toast(`El audio de «${m.filename}» está en silencio (posible problema de micrófono).`, true, 6000);
+    else toast(role === 'voice' ? 'Narración añadida a la pista «Audio»' : 'Música de fondo añadida a la pista «Audio»');
+    if (role === 'voice' && duration() && item.start + m.duration > duration() + 0.5)
+      toast(`La narración dura más que el video (${fmtTime(duration())}). Lo que exceda no se exportará: alargue una imagen o clip para cubrirla.`, true, 9000);
     return;
   }
   if (m.kind === 'video' && !m.has_audio) toast(`«${m.filename}» no tiene audio: se añadirá en silencio.`, true, 6000);
@@ -408,8 +469,8 @@ function updateStage() {
     if (S.playing && inside) {
       const want = (mu.in || 0) + (t - mu.start);
       if (Math.abs(a.currentTime - want) > 0.35) a.currentTime = want;
-      a.volume = clamp(mu.volume, 0, 1); a.playbackRate = rate();
-      if (a.paused) a.play().catch(() => { });
+      a.volume = clamp(mu.volume ?? 1, 0, 1); a.playbackRate = rate();
+      if (a.paused) a.play().catch(err => { if (err && err.name === 'NotAllowedError') toast('El navegador bloqueó el sonido. Haga clic en la página y vuelva a reproducir.', true, 6000); });
     } else if (!a.paused) a.pause();
   }
   // cabezal
@@ -421,6 +482,19 @@ function updateStage() {
   highlightWord();
 }
 
+function syncAudioEls() {
+  const keep = new Set();
+  for (const mu of D().music) {
+    keep.add(mu.id);
+    let a = S.musicEls[mu.id];
+    if (!a || a.dataset.mid !== mu.media_id) {
+      if (a) a.pause();
+      a = new Audio(proxyUrl(mu.media_id)); a.preload = 'auto'; a.dataset.mid = mu.media_id;
+      S.musicEls[mu.id] = a;
+    }
+  }
+  for (const id of Object.keys(S.musicEls)) if (!keep.has(id)) { S.musicEls[id].pause(); S.musicEls[id].removeAttribute('src'); delete S.musicEls[id]; }
+}
 function syncLayers() {
   const box = $('#layersBox');
   const keep = new Set();
@@ -529,6 +603,7 @@ function select(kind, id, { seekTo = false } = {}) {
 /* ================================================================= Línea de tiempo */
 function tlX(t) { return 70 + t * S.pxs; }
 function renderTimeline() {
+  syncAudioEls();
   const T = duration();
   const inner = $('#tlInner');
   const width = Math.max($('#tlScroll').clientWidth, 70 + (T + 30) * S.pxs);
@@ -566,7 +641,9 @@ function renderTimeline() {
     const m = S.media[mu.media_id] || {};
     const len = (mu.out ?? m.duration ?? 0) - (mu.in || 0);
     const it = { id: mu.id, start: mu.start, end: mu.start + len };
-    const d = spanItem('music', it, (m.filename || 'música') + ` · ${Math.round(mu.volume * 100)}%`, 0, 1);
+    const voice = mu.role === 'voice';
+    const d = spanItem('music', it, (voice ? '🎙 ' : '♪ ') + (m.filename || 'audio') + ` · ${Math.round((mu.volume ?? 1) * 100)}%`, 0, 1);
+    if (voice) d.classList.add('voice');
     if (m.has_waveform && m.duration) { d.style.backgroundImage = `url(/api/media/${m.id}/waveform)`; d.style.backgroundSize = `${m.duration * S.pxs}px 70%`; d.style.backgroundPosition = `${-(mu.in || 0) * S.pxs}px 100%`; }
     tracks.music.appendChild(d);
   }
@@ -843,14 +920,21 @@ function renderInspector() {
       el('button', { class: 'btn sm danger', onclick: deleteSelected }, 'Eliminar zoom'));
   } else if (k === 'music') {
     const m = S.media[it.media_id] || {};
-    sec.append(el('h4', {}, 'Música · ' + (m.filename || '')),
-      el('label', { class: 'f' }, el('span', {}, 'Volumen'), range(0, 1, 0.01, it.volume, (v, fin) => { liveEdit(() => { it.volume = v; }, fin); }, v => Math.round(v * 100) + '%')[0]),
-      chk('Bajar automáticamente cuando hay voz (ducking)', it.duck !== false, v => upd(d => { d.music.find(x => x.id === it.id).duck = v; })),
+    const voice = it.role === 'voice';
+    const len = (it.out ?? m.duration) - (it.in || 0);
+    sec.append(el('h4', {}, (voice ? 'Narración · ' : 'Música de fondo · ') + (m.filename || '')),
+      field('Uso', sel([['voice', 'Narración (voz del docente)'], ['music', 'Música de fondo']], voice ? 'voice' : 'music', v => upd(d => {
+        const x = d.music.find(y => y.id === it.id); x.role = v;
+        if (v === 'voice') { x.volume = 1; x.duck = false; } else { x.volume = 0.22; x.duck = true; }
+      }, true)), voice ? 'Se procesa como voz (reducción de ruido, compresor), genera subtítulos si está transcrita y atenúa la música.' : 'Se atenúa automáticamente cuando hay voz.'),
+      el('label', { class: 'f' }, el('span', {}, 'Volumen'), range(0, 1, 0.01, it.volume ?? 1, (v, fin) => { liveEdit(() => { it.volume = v; }, fin); renderTimeline(); }, v => Math.round(v * 100) + '%')[0]),
+      voice ? null : chk('Bajar automáticamente cuando hay voz (ducking)', it.duck !== false, v => upd(d => { d.music.find(x => x.id === it.id).duck = v; })),
       el('div', { class: 'grid2' },
         field('Empieza en', timeIn(it.start, v => upd(d => { d.music.find(x => x.id === it.id).start = Math.max(0, v); }, true))),
         field('Desde (s del audio)', num(it.in || 0, 0.1, v => upd(d => { const mu = d.music.find(x => x.id === it.id); mu.in = clamp(v, 0, (mu.out ?? m.duration) - 0.5); }, true)))),
-      el('div', { class: 'hint' }, 'Fundidos de entrada y salida automáticos. La vista previa no reproduce el ducking; el render sí.'),
-      el('button', { class: 'btn sm danger', onclick: deleteSelected }, 'Quitar música'));
+      el('div', { class: 'hint' }, `Duración: ${fmtTime(len, true)}. Arrastre los bordes en la línea de tiempo para recortar; «Dividir» (S) corta en el cabezal.` + (voice ? '' : ' La vista previa no reproduce el ducking; la exportación sí.')),
+      it.start + len > duration() + 0.5 && duration() ? el('div', { class: 'hint', style: { color: 'var(--amber)' } }, `El audio termina en ${fmtTime(it.start + len)} pero el video dura ${fmtTime(duration())}: lo que exceda no se exportará.`) : null,
+      el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: () => splitAt(S.t) }, '✂ Dividir en cabezal'), el('button', { class: 'btn sm danger', onclick: deleteSelected }, 'Quitar')));
   } else if (k === 'chapter' || k === 'quiz') { openTab('marks'); sec.append(el('h4', {}, k === 'chapter' ? 'Capítulo' : 'Pregunta'), el('p', { class: 'hint' }, 'Edítelo en la pestaña «Lección».')); }
   box.append(sec);
   if (!canEdit()) box.querySelectorAll('input,select,textarea,button').forEach(n => n.disabled = true);
@@ -906,7 +990,10 @@ function renderMedia() {
     const dur = m.kind === 'image' ? 'Imagen' : fmtTime(m.duration);
     const actions = el('div', { class: 'row', style: { gap: '2px' } });
     if (canEdit() && m.status === 'ready') {
-      actions.append(el('button', { class: 'btn sm icon', title: m.kind === 'audio' ? 'Añadir como música' : 'Añadir en el cabezal', onclick: () => addMediaToTimeline(m) }, '+'));
+      if (m.kind === 'audio') {
+        actions.append(el('button', { class: 'btn sm icon', title: 'Añadir como narración (voz) en el cabezal', onclick: () => addMediaToTimeline(m, 'playhead', 'voice') }, '🎙'));
+        actions.append(el('button', { class: 'btn sm icon', title: 'Añadir como música de fondo en el cabezal', onclick: () => addMediaToTimeline(m, 'playhead', 'music') }, '♪'));
+      } else actions.append(el('button', { class: 'btn sm icon', title: 'Añadir en el cabezal', onclick: () => addMediaToTimeline(m) }, '+'));
       if (m.has_audio && m.kind !== 'image') actions.append(el('button', { class: 'btn sm icon', title: tx ? 'Volver a transcribir / traducir' : 'Transcribir', onclick: () => transcribeDialog(m) }, 'Tx'));
     }
     if (canEdit()) actions.append(el('button', { class: 'btn sm icon ghost', title: 'Eliminar medio', onclick: async () => {
@@ -1129,7 +1216,7 @@ function renderAudioPanel() {
   const ml = $('#musicList'); ml.innerHTML = '';
   for (const mu of D().music) {
     const m = S.media[mu.media_id] || {};
-    ml.append(el('div', { class: 'list-item' }, el('div', { class: 'head' }, el('span', { class: 'time', onclick: () => seek(mu.start) }, fmtTime(mu.start)), el('span', { class: 'grow small' }, m.filename || 'música'),
+    ml.append(el('div', { class: 'list-item' }, el('div', { class: 'head' }, el('span', { class: 'time', onclick: () => seek(mu.start) }, fmtTime(mu.start)), el('span', { class: 'grow small' }, (mu.role === 'voice' ? '🎙 ' : '♪ ') + (m.filename || 'audio')),
       el('button', { class: 'btn sm', onclick: () => select('music', mu.id) }, 'Editar'))));
   }
 }
@@ -1306,7 +1393,7 @@ async function pollJobs() {
     list.forEach(m => { const old = S.media[m.id]; S.media[m.id] = { ...m, _dur: old?._dur }; });
     for (const pa of [...S.pendingAdd]) {
       const m = S.media[pa.mid];
-      if (m && m.status === 'ready') { S.pendingAdd.splice(S.pendingAdd.indexOf(pa), 1); if (pa.dur) m._dur = pa.dur; addMediaToTimeline(m, pa.at); }
+      if (m && m.status === 'ready') { S.pendingAdd.splice(S.pendingAdd.indexOf(pa), 1); if (pa.dur) m._dur = pa.dur; addMediaToTimeline(m, pa.at, pa.role); }
       else if (m && m.status === 'error') S.pendingAdd.splice(S.pendingAdd.indexOf(pa), 1);
     }
   }

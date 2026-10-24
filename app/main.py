@@ -466,7 +466,10 @@ def media_proxy(mid: str, user=Depends(current_user)):
     m = _media_for(mid, user)
     if not m["proxy_path"] or not Path(m["proxy_path"]).exists():
         raise HTTPException(404, "Vista previa aún no disponible")
-    return FileResponse(m["proxy_path"], headers={"Cache-Control": "private, max-age=86400"})
+    ext = Path(m["proxy_path"]).suffix.lower()
+    mime = {".mp4": "video/mp4", ".m4a": "audio/mp4", ".png": "image/png"}.get(ext)
+    return FileResponse(m["proxy_path"], media_type=mime,
+                        headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.get("/api/media/{mid}/waveform")
@@ -529,7 +532,7 @@ def preview_captions(pid: str, body: CaptionsIn, user=Depends(current_user)):
     tr = {r["media_id"]: db.jload(r["words"], []) for r in
           db.q("SELECT t.media_id, t.words FROM transcripts t JOIN media m ON m.id=t.media_id "
                "WHERE m.project_id=?", pid)}
-    words = captions.timeline_words(body.data, tr)
+    words = captions.all_words(body.data, tr)
     return {"words": words, "cues": captions.build_cues(words)}
 
 

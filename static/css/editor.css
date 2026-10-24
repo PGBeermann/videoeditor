@@ -109,6 +109,7 @@ body { overflow: hidden; }
 .tl-item.overlay { background: #4b3a6e; }
 .tl-item.zoom { background: #6b4e1f; }
 .tl-item.music { background: #1f4a5e center/100% 70% no-repeat; background-position: 0 100%; }
+.tl-item.music.voice { background-color: #5e3a1f; }
 .tl-mark { position: absolute; top: 2px; width: 14px; height: 28px; margin-left: -7px; cursor: pointer; z-index: 2; }
 .tl-mark::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; }
 .tl-mark::after { content: ""; position: absolute; left: 1px; top: 0; width: 12px; height: 10px; border-radius: 2px 2px 6px 6px; }

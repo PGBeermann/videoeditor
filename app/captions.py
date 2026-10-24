@@ -37,6 +37,30 @@ def timeline_words(project: dict, transcripts: dict[str, list]) -> list[dict]:
     return out
 
 
+def narration_words(project: dict, transcripts: dict[str, list]) -> list[dict]:
+    """Palabras de las narraciones (pista «Audio», role="voice") en tiempo de la línea de tiempo."""
+    total = timeline_duration(project)
+    out = []
+    for mu in project.get("music", []):
+        if mu.get("role") != "voice":
+            continue
+        start, cin = float(mu.get("start", 0)), float(mu.get("in", 0))
+        cout = float(mu.get("out", 1e9))
+        for w in transcripts.get(mu.get("media_id"), []) or []:
+            mid = (w["s"] + w["e"]) / 2
+            if cin <= mid <= cout:
+                s = start + max(0.0, w["s"] - cin)
+                e = start + min(cout, w["e"]) - cin
+                if s < total:
+                    out.append({"w": w["w"], "s": round(s, 3), "e": round(min(max(e, s + 0.05), total), 3)})
+    return out
+
+
+def all_words(project: dict, transcripts: dict[str, list]) -> list[dict]:
+    words = timeline_words(project, transcripts) + narration_words(project, transcripts)
+    return sorted(words, key=lambda w: w["s"])
+
+
 def timeline_segments(project: dict, segments_by_media: dict[str, list]) -> list[dict]:
     """Igual que timeline_words, pero para segmentos (p. ej. traducción al inglés)."""
     out, t0 = [], 0.0

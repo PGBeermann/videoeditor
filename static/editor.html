@@ -46,7 +46,7 @@
         <button class="btn sm" id="btnTitleCard" title="Crea una portada con identidad UNACHI">+ Portada</button>
       </div>
       <div id="mediaList" class="media-list"></div>
-      <p class="muted small">Doble clic o «+» para añadir a la línea de tiempo en la posición del cabezal. Los audios se añaden como música de fondo.</p>
+      <p class="muted small">Doble clic o «+» para añadir a la línea de tiempo en la posición del cabezal. Los audios se añaden con 🎙 como narración o con ♪ como música de fondo.</p>
     </section>
 
     <section class="panel hidden" data-panel="text">
@@ -91,8 +91,8 @@
         <label class="f"><span>Sonoridad final (norma EBU R128 / ITU-R BS.1770)</span>
           <select id="aLoud"><option value="-14">−14 LUFS · YouTube / redes</option><option value="-16">−16 LUFS · Plataformas educativas (recomendado)</option><option value="-23">−23 LUFS · Difusión TV (EBU R128)</option></select></label>
       </div>
-      <h4 style="margin-top:18px">Música de fondo</h4>
-      <p class="muted small">Suba un audio en «Medios» y añádalo. La música baja automáticamente cuando usted habla (ducking).</p>
+      <h4 style="margin-top:18px">Pista de audio</h4>
+      <p class="muted small">Suba un audio en «Medios» y añádalo como narración (🎙) o música de fondo (♪). La música baja automáticamente cuando hay voz.</p>
       <div id="musicList" class="col"></div>
       <h4 style="margin-top:18px">Subtítulos</h4>
       <div class="col" style="margin-top:8px">
@@ -145,7 +145,7 @@
       <button class="btn sm icon" id="btnFwd" title="+5 s (L)">»</button>
       <span class="mono tc"><span id="tcNow">0:00.0</span> <span class="muted">/ <span id="tcDur">0:00</span></span></span>
       <div class="grow"></div>
-      <button class="btn sm" id="btnSplit" title="Dividir clip en el cabezal (S)">✂ Dividir</button>
+      <button class="btn sm" id="btnSplit" title="Dividir en el cabezal el clip, audio o capa seleccionado (S)">✂ Dividir</button>
       <label class="chk small"><input type="checkbox" id="showCaps" checked> Subtítulos</label>
       <select id="rate" class="sm-select" title="Velocidad de vista previa"><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
     </div>
@@ -174,7 +174,7 @@
         <div class="tl-track" data-track="overlays"><span class="tl-label">Capas</span></div>
         <div class="tl-track" data-track="zooms"><span class="tl-label">Zoom</span></div>
         <div class="tl-track tl-main" data-track="clips"><span class="tl-label">Video</span></div>
-        <div class="tl-track" data-track="music"><span class="tl-label">Música</span></div>
+        <div class="tl-track" data-track="music"><span class="tl-label">Audio</span></div>
         <div class="tl-playhead" id="playhead"></div>
       </div>
     </div>
@@ -247,7 +247,7 @@
       <tr><td><kbd>Espacio</kbd></td><td>Reproducir / pausar</td></tr>
       <tr><td><kbd>J</kbd> <kbd>L</kbd></td><td>Retroceder / avanzar 5 s</td></tr>
       <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Un cuadro atrás / adelante (con Mayús: 1 s)</td></tr>
-      <tr><td><kbd>S</kbd></td><td>Dividir el clip en el cabezal</td></tr>
+      <tr><td><kbd>S</kbd></td><td>Dividir en el cabezal (el audio, la capa o el zoom seleccionado; si no, el clip de video)</td></tr>
       <tr><td><kbd>Supr</kbd></td><td>Eliminar el elemento seleccionado o las palabras seleccionadas</td></tr>
       <tr><td><kbd>M</kbd></td><td>Agregar capítulo</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Mayús</kbd>+<kbd>Z</kbd></td><td>Deshacer / rehacer</td></tr>

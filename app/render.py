@@ -189,7 +189,7 @@ class Renderer:
         return ",".join(f) if f else "anull"
 
     def build_cues(self) -> list[dict]:
-        words = captions.timeline_words(self.p, self.transcripts)
+        words = captions.all_words(self.p, self.transcripts)
         return captions.build_cues(words)
 
     def stage_b(self, base: Path, cues: list[dict]) -> Path:
@@ -270,44 +270,60 @@ class Renderer:
             cur = "vs"
         fl.append(f"[{cur}]format=yuv420p[vfinal]")
 
-        # Audio: voz procesada + música con ducking
-        fl.append(f"[0:a]{self._audio_chain()}[voice]")
-        music = [mu for mu in self.p.get("music", [])
-                 if mu.get("media_id") in self.media and self.media[mu["media_id"]]["has_audio"]]
-        if music:
-            mlabels = []
-            for j, mu in enumerate(music):
-                mm = self.media[mu["media_id"]]
-                start = max(0.0, float(mu.get("start", 0)))
-                if start >= T:
-                    continue
-                mi = float(mu.get("in", 0))
-                mo = float(mu.get("out", mm["duration"]) or mm["duration"])
-                length = max(0.1, min(mo - mi, T - start))
-                args += ["-ss", _f(mi), "-t", _f(length), "-i", mm["path"]]
-                vol = float(mu.get("volume", 0.25))
-                d = int(start * 1000)
-                fade = min(1.5, length / 4)
-                fl.append(f"[{n}:a]aformat=sample_rates=48000:channel_layouts=stereo,"
-                          f"volume={_f(vol)},afade=t=in:d={_f(fade)},"
-                          f"afade=t=out:st={_f(length - fade)}:d={_f(fade)},"
-                          f"adelay={d}|{d}[m{j}]")
-                mlabels.append(f"[m{j}]")
-                n += 1
-            if mlabels:
-                if len(mlabels) > 1:
-                    fl.append(f"{''.join(mlabels)}amix=inputs={len(mlabels)}:normalize=0[mus]")
-                else:
-                    fl.append(f"{mlabels[0]}anull[mus]")
-                if any(mu.get("duck", True) for mu in music):
-                    fl.append("[voice]asplit=2[vmain][vsc]")
-                    fl.append("[mus][vsc]sidechaincompress=threshold=0.02:ratio=10:"
-                              "attack=15:release=450:makeup=1[mduck]")
-                    fl.append("[vmain][mduck]amix=inputs=2:duration=first:normalize=0[afinal]")
-                else:
-                    fl.append("[voice][mus]amix=inputs=2:duration=first:normalize=0[afinal]")
+        # Audio. Pista «Audio» con dos usos:
+        #   role="voice"  narración: se suma a la voz de los clips y pasa por la misma
+        #                 cadena (ruido, de-esser, compresor); es la señal que atenúa la música
+        #   role="music"  música de fondo: se atenúa (ducking) cuando hay voz
+        voice_lbls, music_lbls, duck = [], [], False
+        for j, mu in enumerate(self.p.get("music", [])):
+            mm = self.media.get(mu.get("media_id"))
+            if not mm or not mm["has_audio"]:
+                continue
+            start = max(0.0, float(mu.get("start", 0)))
+            if start >= T:
+                continue
+            mi = float(mu.get("in", 0))
+            mo = float(mu.get("out", mm["duration"]) or mm["duration"])
+            length = min(mo - mi, T - start)
+            if length < 0.05:
+                continue
+            args += ["-ss", _f(mi), "-t", _f(length), "-i", mm["path"]]
+            amap = mm.get("audio_map") or [0]
+            mix = audio_filter(n, amap, f"mi{j}")
+            if mix:
+                fl.append(mix)
+            src = f"[mi{j}]" if mix else f"[{n}:a:{amap[0]}]"
+            voice = mu.get("role", "music") == "voice"
+            vol = float(mu.get("volume", 1.0 if voice else 0.25))
+            fade = min(0.02 if voice else 1.5, length / 4)
+            d = int(round(start * 1000))
+            fl.append(f"{src}aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS,"
+                      f"volume={_f(vol)},afade=t=in:d={_f(fade)},"
+                      f"afade=t=out:st={_f(max(0, length - fade))}:d={_f(fade)},"
+                      f"adelay={d}|{d}[m{j}]")
+            (voice_lbls if voice else music_lbls).append(f"[m{j}]")
+            if not voice and mu.get("duck", True):
+                duck = True
+            n += 1
+        if voice_lbls:
+            fl.append(f"[0:a]{''.join(voice_lbls)}amix=inputs={len(voice_lbls) + 1}:"
+                      f"duration=first:normalize=0:dropout_transition=0[vin]")
+            fl.append(f"[vin]{self._audio_chain()}[voice]")
+        else:
+            fl.append(f"[0:a]{self._audio_chain()}[voice]")
+        if music_lbls:
+            if len(music_lbls) > 1:
+                fl.append(f"{''.join(music_lbls)}amix=inputs={len(music_lbls)}:normalize=0:"
+                          f"dropout_transition=0[mus]")
             else:
-                fl.append("[voice]anull[afinal]")
+                fl.append(f"{music_lbls[0]}anull[mus]")
+            if duck:
+                fl.append("[voice]asplit=2[vmain][vsc]")
+                fl.append("[mus][vsc]sidechaincompress=threshold=0.02:ratio=10:"
+                          "attack=15:release=450:makeup=1[mduck]")
+                fl.append("[vmain][mduck]amix=inputs=2:duration=first:normalize=0[afinal]")
+            else:
+                fl.append("[voice][mus]amix=inputs=2:duration=first:normalize=0[afinal]")
         else:
             fl.append("[voice]anull[afinal]")
 
@@ -386,7 +402,7 @@ class Renderer:
             (out_dir / "subtitulos_es.vtt").write_text(captions.to_vtt(cues), encoding="utf-8")
             files["srt"] = str(out_dir / "subtitulos_es.srt")
             files["vtt"] = str(out_dir / "subtitulos_es.vtt")
-            words = captions.timeline_words(self.p, self.transcripts)
+            words = captions.all_words(self.p, self.transcripts)
             (out_dir / "transcripcion.txt").write_text(_paragraphs(words), encoding="utf-8")
             files["txt"] = str(out_dir / "transcripcion.txt")
         segs = captions.timeline_segments(self.p, self.translations)
