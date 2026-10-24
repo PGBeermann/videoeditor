@@ -122,7 +122,7 @@ async function load() {
   await Promise.all(Object.keys(S.txMeta).map(loadTranscript));
   const add = new URLSearchParams(location.search).get('add');
   if (add && S.media[add]) { S.pendingAdd.push({ mid: add, at: 'end' }); history.replaceState(null, '', location.pathname); }
-  computeWords(); fitStage(); renderAll(); seek(0); loadComments(); loadExports();
+  computeWords(); applyLayout(); fitStage(); renderAll(); seek(0); loadComments(); loadExports();
   for (const pa of [...S.pendingAdd]) {
     const m = S.media[pa.mid];
     if (m && m.status === 'ready') { S.pendingAdd.splice(S.pendingAdd.indexOf(pa), 1); addMediaToTimeline(m, pa.at); }
@@ -335,14 +335,28 @@ function deleteSelected() {
 const vid = $('#vid'), still = $('#still');
 function proxyUrl(mid) { return `/api/media/${mid}/proxy`; }
 
+/* Disposición según el formato del proyecto:
+   - 9:16: la ventana de salida va a la derecha y ocupa toda la altura bajo la cabecera
+   - 16:9 y 1:1: arriba al centro
+   En ambos casos la ventana tiene exactamente la proporción del video, así que este la llena. */
+function applyLayout() {
+  const vertical = H0() > W0();
+  document.body.classList.toggle('vertical', vertical);
+  if (vertical) {
+    const avail = window.innerHeight - 52;
+    const w = Math.round(clamp(avail * W0() / H0(), 240, window.innerWidth * 0.42));
+    document.documentElement.style.setProperty('--pvw', w + 'px');
+  }
+}
 function fitStage() {
   const wrap = $('#stageWrap'), st = $('#stage');
-  const aw = wrap.clientWidth - 28, ah = wrap.clientHeight - 28;
+  const aw = wrap.clientWidth, ah = wrap.clientHeight;
   const r = W0() / H0();
   let w = aw, h = aw / r; if (h > ah) { h = ah; w = ah * r; }
-  st.style.width = Math.max(50, w) + 'px'; st.style.height = Math.max(30, h) + 'px';
+  st.style.width = Math.max(50, Math.floor(w)) + 'px'; st.style.height = Math.max(30, Math.floor(h)) + 'px';
   $('#caption').style.fontSize = Math.max(10, h * (H0() > W0() ? 0.032 : 0.045)) + 'px';
 }
+window.addEventListener('resize', () => { if (S.data) { applyLayout(); fitStage(); } });
 new ResizeObserver(() => S.data && fitStage()).observe($('#stageWrap'));
 
 function waitEvent(elm, ev, ms = 4000) {
@@ -481,6 +495,83 @@ function updateStage() {
   }
   highlightWord();
 }
+
+/* ================================================================= Vista en celular
+   Dibuja el cuadro actual de la vista previa (video, zoom, capas, logo, subtítulos) en
+   cualquier lienzo. La ventana del celular la llama en cada cuadro. */
+function composeFrame(ctx, W, H) {
+  ctx.save();
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  const t = S.t, loc = locate(t);
+  if (loc) {
+    const m = S.media[loc.clip.media_id] || {};
+    const src = m.kind === 'image' ? still : vid;
+    const sw = src.videoWidth || src.naturalWidth, sh = src.videoHeight || src.naturalHeight;
+    if (sw && sh) {
+      const { z, cx, cy } = zoomAt(t);
+      ctx.save();
+      if (z > 1.001) {
+        const left = clamp(cx - 0.5 / z, 0, 1 - 1 / z), top = clamp(cy - 0.5 / z, 0, 1 - 1 / z);
+        ctx.translate(-left * z * W, -top * z * H); ctx.scale(z, z);
+      }
+      const k = loc.clip.fit === 'cover' ? Math.max(W / sw, H / sh) : Math.min(W / sw, H / sh);
+      const dw = sw * k, dh = sh * k;
+      try { ctx.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh); } catch (_) { /* cuadro aún no disponible */ }
+      ctx.restore();
+    }
+  }
+  for (const ov of D().overlays) {
+    if (!(t >= ov.start && t < ov.end)) continue;
+    const img = S.layerEls[ov.id]?.querySelector('img');
+    if (!img || !img.complete || !img.naturalWidth) continue;
+    const w = ov.w * W, h = w * img.naturalHeight / img.naturalWidth;
+    ctx.globalAlpha = ov.opacity ?? 1;
+    ctx.drawImage(img, ov.x * W, ov.y * H, w, h);
+    ctx.globalAlpha = 1;
+  }
+  const b = D().brand, logo = $('#logoPrev');
+  if (b.logo_asset_id && logo && logo.complete && logo.naturalWidth) {
+    const w = b.size * W, h = w * logo.naturalHeight / logo.naturalWidth, mg = 0.025 * W;
+    ctx.globalAlpha = b.opacity;
+    ctx.drawImage(logo, b.position.includes('l') ? mg : W - w - mg, b.position.includes('t') ? mg : H - h - mg, w, h);
+    ctx.globalAlpha = 1;
+  }
+  const cue = $('#showCaps').checked ? S.cues.find(c => t >= c.s && t < c.e) : null;
+  if (cue) {
+    const fs = Math.max(10, H * (H0() > W0() ? 0.032 : 0.045));
+    ctx.font = `700 ${fs}px system-ui, "Segoe UI", Roboto, Arial, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const maxW = W * 0.88, words = cue.text.split(' '), lines = [];
+    let line = '';
+    for (const w of words) { const tst = line ? line + ' ' + w : w; if (ctx.measureText(tst).width > maxW && line) { lines.push(line); line = w; } else line = tst; }
+    lines.push(line);
+    const lh = fs * 1.5, padX = fs * 0.4, bottom = H * 0.94;
+    lines.forEach((ln, i) => {
+      const y = bottom - (lines.length - 1 - i) * lh - lh / 2, tw = ctx.measureText(ln).width;
+      ctx.fillStyle = 'rgba(0,0,0,.62)';
+      ctx.fillRect(W / 2 - tw / 2 - padX, y - lh / 2 + fs * 0.12, tw + padX * 2, lh - fs * 0.24);
+      ctx.fillStyle = D().captions.color || '#fff';
+      ctx.fillText(ln, W / 2, y);
+    });
+  }
+  ctx.restore();
+}
+/* Interfaz que usa la ventana del celular (misma pestaña de origen) */
+window.EVEditor = {
+  composeFrame,
+  info: () => ({ name: S.name, width: W0(), height: H0(), t: S.t, duration: duration(), playing: S.playing }),
+  toggle: () => (S.playing ? pause() : play()),
+  seek: t => seek(t),
+};
+let phoneWin = null;
+function openPhone() {
+  const vertical = H0() >= W0();
+  const [w, h] = vertical ? [460, 940] : [980, 560];
+  if (phoneWin && !phoneWin.closed) { phoneWin.focus(); return; }
+  phoneWin = window.open('/static/movil.html', 'evMovil', `popup=yes,width=${w},height=${h}`);
+  if (!phoneWin) toast('El navegador bloqueó la ventana emergente: permita ventanas emergentes para este sitio.', true, 7000);
+}
+$('#btnPhone').onclick = openPhone;
 
 function syncAudioEls() {
   const keep = new Set();

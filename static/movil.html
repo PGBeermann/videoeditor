@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vista en celular</title>
+<style>
+  :root { color-scheme: dark; --green: #4A7729; --green-hi: #7fb069; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: radial-gradient(800px 600px at 50% 30%, #23282d, #0c0e10); color: #e7eaed;
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; overflow: hidden; }
+  .wrap { height: 100%; display: flex; flex-direction: column; align-items: center; }
+  .stagebox { flex: 1; min-height: 0; width: 100%; display: grid; place-items: center; padding: 14px; }
+  /* Marco del teléfono */
+  .phone { position: relative; background: #0a0a0a; border-radius: calc(var(--u) * 7); padding: calc(var(--u) * 1.6);
+    box-shadow: 0 0 0 calc(var(--u) * .35) #3a3f45, 0 0 0 calc(var(--u) * .7) #15181b, 0 30px 80px rgba(0,0,0,.7); }
+  .phone::before, .phone::after { content: ""; position: absolute; background: #2a2e33; border-radius: 3px; }
+  .phone.portrait::before { right: calc(var(--u) * -1.05); top: 22%; width: calc(var(--u) * .5); height: 9%; }
+  .phone.portrait::after { left: calc(var(--u) * -1.05); top: 18%; width: calc(var(--u) * .5); height: 14%; }
+  .phone.landscape::before { top: calc(var(--u) * -1.05); left: 22%; height: calc(var(--u) * .5); width: 9%; }
+  .phone.landscape::after { bottom: calc(var(--u) * -1.05); left: 18%; height: calc(var(--u) * .5); width: 14%; }
+  .screen { position: relative; overflow: hidden; background: #000; border-radius: calc(var(--u) * 5.5); }
+  .screen canvas { position: absolute; display: block; }
+  .island { position: absolute; background: #000; border-radius: 99px; z-index: 4; }
+  .portrait .island { top: calc(var(--u) * 1.4); left: 50%; transform: translateX(-50%); width: 30%; height: calc(var(--u) * 3.2); }
+  .landscape .island { left: calc(var(--u) * 1.4); top: 50%; transform: translateY(-50%); height: 30%; width: calc(var(--u) * 3.2); }
+  .status { position: absolute; left: 0; right: 0; top: 0; height: calc(var(--u) * 6); display: flex; align-items: center;
+    justify-content: space-between; padding: 0 calc(var(--u) * 6); font-weight: 650; font-size: calc(var(--u) * 1.9); z-index: 3;
+    text-shadow: 0 1px 2px rgba(0,0,0,.6); pointer-events: none; }
+  .landscape .status { display: none; }
+  .home { position: absolute; bottom: calc(var(--u) * 1.2); left: 50%; transform: translateX(-50%); width: 34%; height: calc(var(--u) * .7);
+    background: rgba(255,255,255,.85); border-radius: 99px; z-index: 3; pointer-events: none; }
+  .landscape .home { width: 22%; }
+  /* Interfaz simulada de red social (para revisar zonas que quedarían tapadas) */
+  .social { position: absolute; inset: 0; z-index: 2; pointer-events: none; font-size: calc(var(--u) * 1.8); }
+  .social .icons { position: absolute; right: calc(var(--u) * 2); bottom: 18%; display: flex; flex-direction: column; gap: calc(var(--u) * 2.4); align-items: center; }
+  .social .icons div { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: calc(var(--u) * 1.4); text-shadow: 0 1px 3px #000; }
+  .social .icons b { font-size: calc(var(--u) * 3.6); line-height: 1; font-weight: 400; }
+  .social .bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: calc(var(--u) * 3) calc(var(--u) * 10) calc(var(--u) * 4) calc(var(--u) * 2.4);
+    background: linear-gradient(transparent, rgba(0,0,0,.6)); text-shadow: 0 1px 3px #000; }
+  .social .bottom b { display: block; margin-bottom: 3px; }
+  .social .top { position: absolute; top: calc(var(--u) * 6.5); left: 0; right: 0; text-align: center; font-weight: 650; text-shadow: 0 1px 3px #000; }
+  /* Barra de controles */
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; padding: 10px 12px 14px; }
+  .bar button, .bar select { height: 32px; border-radius: 6px; border: 1px solid #3d444c; background: #22262b; color: #e7eaed; font: inherit; padding: 0 10px; cursor: pointer; }
+  .bar button:hover { background: #2a2f35; }
+  .bar button.primary { background: var(--green); border-color: #5d8f3a; color: #fff; min-width: 44px; }
+  .bar .tc { font-family: ui-monospace, Menlo, Consolas, monospace; min-width: 96px; text-align: center; }
+  .bar label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .msg { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 30px; background: rgba(12,14,16,.94); z-index: 10; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="stagebox" id="stagebox">
+    <div class="phone portrait" id="phone">
+      <div class="screen" id="screen">
+        <canvas id="cv"></canvas>
+        <div class="island"></div>
+        <div class="status"><span id="clock">9:41</span><span>▂▄▆ 5G ▮</span></div>
+        <div class="social hidden" id="social">
+          <div class="top">Reels</div>
+          <div class="icons"><div><b>♡</b>1,2 mil</div><div><b>💬</b>86</div><div><b>➤</b></div><div><b>⋯</b></div></div>
+          <div class="bottom"><b>@unachi.quimica</b><span id="socialTitle">Título de la lección</span></div>
+        </div>
+        <div class="home"></div>
+      </div>
+    </div>
+  </div>
+  <div class="bar">
+    <button id="bStart" title="Ir al inicio">⏮</button>
+    <button id="bPlay" class="primary" title="Reproducir / pausar (Espacio)">▶</button>
+    <span class="tc" id="tc">0:00 / 0:00</span>
+    <select id="fmt" title="Formato a simular">
+      <option value="proj">Formato del proyecto</option>
+      <option value="9:16">9:16 · vertical (Reels, TikTok, Shorts)</option>
+      <option value="16:9">16:9 · horizontal</option>
+    </select>
+    <select id="reframe" title="Cómo adaptar si el formato difiere del proyecto">
+      <option value="blur">Encajar con fondo desenfocado</option>
+      <option value="crop">Recortar al centro</option>
+    </select>
+    <button id="bRotate" title="Girar el teléfono">⟳ Girar</button>
+    <label id="lSocial"><input type="checkbox" id="chkSocial"> Interfaz de red social</label>
+  </div>
+</div>
+<div class="msg hidden" id="msg"><div><h3>El editor no está disponible</h3><p>Abra esta vista con el botón «📱 Vista en celular» desde el editor del proyecto.</p></div></div>
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const cv = $('#cv'), ctx = cv.getContext('2d');
+const off = document.createElement('canvas'), offCtx = off.getContext('2d');
+let orientation = null;        // 'portrait' | 'landscape' (null = automático según formato)
+
+function editor() {
+  try { return window.opener && !window.opener.closed && window.opener.EVEditor ? window.opener.EVEditor : null; }
+  catch (_) { return null; }
+}
+function fmt(s) { s = Math.max(0, s || 0); const m = Math.floor(s / 60), x = Math.floor(s % 60); return m + ':' + String(x).padStart(2, '0'); }
+
+/* Proporción que se simula y orientación del teléfono */
+function target(info) {
+  const v = $('#fmt').value;
+  if (v === '9:16') return [9, 16];
+  if (v === '16:9') return [16, 9];
+  return [info.width, info.height];
+}
+function layout(info) {
+  const [tw, th] = target(info);
+  const orient = orientation || (th >= tw ? 'portrait' : 'landscape');
+  const phone = $('#phone'), screen = $('#screen');
+  phone.className = 'phone ' + orient;
+  // Pantalla de teléfono moderno: 19,5:9
+  const sr = orient === 'portrait' ? 9 / 19.5 : 19.5 / 9;
+  // Ajuste a la ventana contando el marco (≈15 % de la dimensión menor) y los botones laterales
+  const box = $('#stagebox'), aw = box.clientWidth - 40, ah = box.clientHeight - 40;
+  const bw = sr, bh = 1, m = Math.min(bw, bh);
+  const k = Math.min(aw / (bw + 0.16 * m), ah / (bh + 0.16 * m));
+  const sw = bw * k, sh = bh * k;
+  const u = Math.min(sw, sh) / 46;                 // unidad de medida del marco
+  phone.style.setProperty('--u', u + 'px');
+  screen.style.width = Math.floor(sw) + 'px'; screen.style.height = Math.floor(sh) + 'px';
+  // El video ocupa todo el ancho (o alto) de la pantalla disponible, centrado
+  let vw = sw, vh = sw * th / tw; if (vh > sh) { vh = sh; vw = sh * tw / th; }
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.style.width = vw + 'px'; cv.style.height = vh + 'px';
+  cv.style.left = (sw - vw) / 2 + 'px'; cv.style.top = (sh - vh) / 2 + 'px';
+  const cw = Math.round(vw * dpr), ch = Math.round(vh * dpr);
+  if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+  $('#social').classList.toggle('hidden', !$('#chkSocial').checked || orient !== 'portrait');
+  $('#lSocial').classList.toggle('hidden', orient !== 'portrait');
+  $('#reframe').classList.toggle('hidden', Math.abs(tw / th - info.width / info.height) < 0.01);
+}
+
+function frame() {
+  requestAnimationFrame(frame);
+  const ed = editor();
+  $('#msg').classList.toggle('hidden', !!ed);
+  if (!ed) return;
+  let info;
+  try { info = ed.info(); } catch (_) { return; }
+  layout(info);
+  $('#tc').textContent = fmt(info.t) + ' / ' + fmt(info.duration);
+  $('#bPlay').textContent = info.playing ? '❚❚' : '▶';
+  $('#socialTitle').textContent = info.name;
+  const W = cv.width, H = cv.height;
+  const [tw, th] = target(info);
+  const same = Math.abs(tw / th - info.width / info.height) < 0.01;
+  if (same) { ed.composeFrame(ctx, W, H); return; }
+  // Formato distinto al del proyecto: se compone en la proporción original y se adapta
+  // igual que en la exportación (fondo desenfocado o recorte al centro)
+  const pr = info.width / info.height;
+  const oh = Math.round(Math.max(H, W / pr)), ow = Math.round(oh * pr);
+  if (off.width !== ow || off.height !== oh) { off.width = ow; off.height = oh; }
+  ed.composeFrame(offCtx, ow, oh);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  const cover = Math.max(W / ow, H / oh), contain = Math.min(W / ow, H / oh);
+  if ($('#reframe').value === 'crop') {
+    ctx.drawImage(off, (W - ow * cover) / 2, (H - oh * cover) / 2, ow * cover, oh * cover);
+  } else {
+    ctx.save(); ctx.filter = 'blur(' + Math.round(W / 36) + 'px) brightness(0.9)';
+    ctx.drawImage(off, (W - ow * cover) / 2, (H - oh * cover) / 2, ow * cover, oh * cover);
+    ctx.restore();
+    ctx.drawImage(off, (W - ow * contain) / 2, (H - oh * contain) / 2, ow * contain, oh * contain);
+  }
+}
+
+$('#bPlay').onclick = () => { const ed = editor(); if (ed) ed.toggle(); };
+$('#bStart').onclick = () => { const ed = editor(); if (ed) ed.seek(0); };
+$('#bRotate').onclick = () => {
+  const cur = $('#phone').classList.contains('portrait') ? 'portrait' : 'landscape';
+  orientation = cur === 'portrait' ? 'landscape' : 'portrait';
+};
+$('#fmt').onchange = () => { orientation = null; };
+document.addEventListener('keydown', e => {
+  if (e.key === ' ' && e.target.tagName !== 'SELECT') { e.preventDefault(); $('#bPlay').click(); }
+});
+function tickClock() { const d = new Date(); $('#clock').textContent = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); }
+tickClock(); setInterval(tickClock, 30000);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

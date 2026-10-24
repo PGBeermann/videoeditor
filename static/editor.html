@@ -138,18 +138,20 @@
         <div class="zoom-pick hidden" id="zoomPick">Haga clic en el punto que desea ampliar</div>
       </div>
     </div>
-    <div class="transport">
-      <button class="btn sm icon" id="btnStart" title="Inicio (Inicio)">⏮</button>
-      <button class="btn sm icon" id="btnBack" title="−5 s (J)">«</button>
-      <button class="btn icon primary" id="btnPlay" title="Reproducir / pausar (Espacio)">▶</button>
-      <button class="btn sm icon" id="btnFwd" title="+5 s (L)">»</button>
-      <span class="mono tc"><span id="tcNow">0:00.0</span> <span class="muted">/ <span id="tcDur">0:00</span></span></span>
-      <div class="grow"></div>
-      <button class="btn sm" id="btnSplit" title="Dividir en el cabezal el clip, audio o capa seleccionado (S)">✂ Dividir</button>
-      <label class="chk small"><input type="checkbox" id="showCaps" checked> Subtítulos</label>
-      <select id="rate" class="sm-select" title="Velocidad de vista previa"><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
-    </div>
   </main>
+
+  <div class="transport ed-tr">
+    <button class="btn sm icon" id="btnStart" title="Inicio (Inicio)">⏮</button>
+    <button class="btn sm icon" id="btnBack" title="−5 s (J)">«</button>
+    <button class="btn icon primary" id="btnPlay" title="Reproducir / pausar (Espacio)">▶</button>
+    <button class="btn sm icon" id="btnFwd" title="+5 s (L)">»</button>
+    <span class="mono tc"><span id="tcNow">0:00.0</span> <span class="muted">/ <span id="tcDur">0:00</span></span></span>
+    <div class="grow"></div>
+    <button class="btn sm" id="btnSplit" title="Dividir en el cabezal el clip, audio o capa seleccionado (S)">✂ Dividir</button>
+    <button class="btn sm" id="btnPhone" title="Abrir la vista previa en una ventana que simula un celular">📱 Vista en celular</button>
+    <label class="chk small"><input type="checkbox" id="showCaps" checked> Subtítulos</label>
+    <select id="rate" class="sm-select" title="Velocidad de vista previa"><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+  </div>
 
   <aside class="ed-insp" id="inspector">
     <div class="insp-empty muted">
