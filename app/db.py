@@ -85,6 +85,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at REAL
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, created_at);
+CREATE TABLE IF NOT EXISTS heartbeats (
+  name TEXT PRIMARY KEY,
+  at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS exports (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -186,6 +190,11 @@ def jload(s, default=None):
         return json.loads(s)
     except (TypeError, ValueError):
         return default
+
+
+def heartbeat(name: str) -> None:
+    ex("INSERT INTO heartbeats(name, at) VALUES (?,?) "
+       "ON CONFLICT(name) DO UPDATE SET at=excluded.at", name, now())
 
 
 def enqueue(job_type: str, project_id: str | None, media_id: str | None = None,

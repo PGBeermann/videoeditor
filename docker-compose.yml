@@ -5,7 +5,6 @@
 services:
   web:
     build: .
-    image: estudio-video:latest
     restart: unless-stopped
     environment:
       ADMIN_USER: ${ADMIN_USER:-admin}
@@ -18,8 +17,8 @@ services:
       - "8000"
 
   worker:
+    # Misma imagen que «web» (la segunda construcción sale íntegra de la caché)
     build: .
-    image: estudio-video:latest
     restart: unless-stopped
     command: ["python", "-m", "app.worker"]
     healthcheck:

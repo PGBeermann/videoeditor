@@ -880,9 +880,9 @@ function renderMedia() {
     } else thumb.textContent = m.status === 'error' ? '⚠' : '…';
     const tx = S.txMeta[m.id];
     let status;
-    if (m.status === 'processing') status = el('span', { class: 'badge warn' }, job && job.type === 'ingest' ? `Procesando ${Math.round(job.progress * 100)}%` : 'En cola');
+    if (m.status === 'processing') status = el('span', { class: 'badge warn' }, job && job.status === 'running' ? `Procesando ${Math.round(job.progress * 100)}%` : job && job.position ? `En cola (n.º ${job.position})` : 'En cola');
     else if (m.status === 'error') status = el('span', { class: 'badge err' }, 'Error');
-    else if (job && job.type === 'transcribe') status = el('span', { class: 'badge warn' }, `Transcribiendo ${Math.round(job.progress * 100)}%`);
+    else if (job && job.type === 'transcribe') status = el('span', { class: 'badge warn' }, job.status === 'running' ? `Transcribiendo ${Math.round(job.progress * 100)}%` : 'Transcripción en cola');
     else if (tx) status = el('span', { class: 'badge ok', title: 'Idioma: ' + tx.language }, 'Transcrito' + (tx.translated ? ' + EN' : ''));
     else status = null;
     const dur = m.kind === 'image' ? 'Imagen' : fmtTime(m.duration);
@@ -1272,7 +1272,7 @@ async function pollJobs() {
   let r;
   try { r = await API.get(`/api/projects/${PID}/jobs`); } catch (_) { S.jobsTimer = setTimeout(pollJobs, 5000); return; }
   const prevActive = S.jobs.filter(j => j.status === 'queued' || j.status === 'running').map(j => j.id);
-  S.jobs = r.jobs;
+  S.jobs = r.jobs; S.worker = r.worker || {}; S.running = r.running || [];
   let mediaChanged = false;
   for (const j of S.jobs) {
     if ((j.status === 'done' || j.status === 'error') && prevActive.includes(j.id) && !S.knownDone.has(j.id)) {
@@ -1304,8 +1304,17 @@ function renderJobs() {
   if (!act.length && !box.querySelector('.job')) { box.classList.add('hidden'); return; }
   showJobsBox();
   const names = { ingest: 'Procesando', transcribe: 'Transcribiendo', render: 'Exportando' };
+  const queued = t => act.some(j => j.status === 'queued' && t.includes(j.type));
+  const warn = txt => box.append(el('div', { class: 'job srv', style: { color: 'var(--amber)' } }, txt));
+  if (queued(['ingest']) && S.worker.rapido === false)
+    warn('⚠ El procesador de trabajos no responde. En Dokploy, revise que el servicio «worker» esté en ejecución y consulte sus registros (Logs).');
+  if (queued(['transcribe', 'render']) && S.worker.pesado === false)
+    warn('⚠ El procesador de transcripción y exportación no responde. Revise el servicio «worker» en Dokploy.');
+  const other = S.running.filter(x => !x.mine && x.type !== 'ingest');
+  if (queued(['transcribe', 'render']) && other.length && S.worker.pesado !== false)
+    warn(`En espera: el servidor está ${other[0].type === 'render' ? 'exportando' : 'transcribiendo'} otro proyecto (${Math.round(other[0].progress * 100)}%).`);
   for (const j of act) box.append(el('div', { class: 'job srv' },
-    el('div', { class: 't' }, el('span', { class: 'grow' }, `${names[j.type]} ${j.filename || j.params.format || ''}`), el('span', { class: 'muted' }, j.status === 'queued' ? 'en cola' : Math.round(j.progress * 100) + '%')),
+    el('div', { class: 't' }, el('span', { class: 'grow' }, `${names[j.type]} ${j.filename || j.params.format || ''}`), el('span', { class: 'muted' }, j.status === 'queued' ? (j.position ? `en cola · n.º ${j.position}` : 'en cola') : Math.round(j.progress * 100) + '%')),
     el('div', { class: 'progress' }, el('i', { style: { width: (j.progress * 100) + '%' } })),
     j.message && j.status === 'running' ? el('span', { class: 'muted small' }, j.message) : null));
 }

@@ -570,8 +570,24 @@ def list_jobs(pid: str, user=Depends(current_user)):
     check_project(pid, user)
     rows = db.q("SELECT j.*, m.filename FROM jobs j LEFT JOIN media m ON m.id=j.media_id "
                 "WHERE j.project_id=? ORDER BY j.created_at DESC LIMIT 40", pid)
-    queued = db.q1("SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running')")["n"]
-    return {"jobs": [_job_out(r) for r in rows], "queue": queued}
+    jobs = [_job_out(r) for r in rows]
+    # Posición en la cola de cada trabajo pendiente (la cola es común a todos los proyectos)
+    lane = {"ingest": ("ingest",), "transcribe": ("transcribe", "render"), "render": ("transcribe", "render")}
+    for j in jobs:
+        if j["status"] == "queued":
+            types = lane.get(j["type"], (j["type"],))
+            marks = ",".join("?" * len(types))
+            j["position"] = db.q1(f"SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running') "
+                                  f"AND type IN ({marks}) AND created_at < ?", *types, j["created_at"])["n"] + 1
+    busy = [{"type": r["type"], "progress": r["progress"], "mine": r["project_id"] == pid}
+            for r in db.q("SELECT type, progress, project_id FROM jobs WHERE status='running'")]
+    beats = {r["name"]: r["at"] for r in db.q("SELECT name, at FROM heartbeats")}
+    t = db.now()
+    running_types = {r["type"] for r in db.q("SELECT type FROM jobs WHERE status='running'")}
+    worker = {"rapido": t - beats.get("worker:rapido", 0) < 60 or "ingest" in running_types,
+              "pesado": t - beats.get("worker:pesado", 0) < 60
+              or bool(running_types & {"transcribe", "render"})}
+    return {"jobs": jobs, "running": busy, "worker": worker}
 
 
 @app.delete("/api/jobs/{jid}")

@@ -8,9 +8,9 @@ from __future__ import annotations
 import os
 import secrets
 import signal
+import threading
 import time
 import traceback
-from pathlib import Path
 
 from . import config, db, media, transcribe
 from .render import Renderer, cleanup
@@ -24,24 +24,30 @@ def _sig(*_):
 
 
 class Progress:
-    def __init__(self, job_id: str):
+    def __init__(self, job_id: str, job_type: str = ""):
         self.job_id = job_id
+        self.lane = "worker:rapido" if job_type == "ingest" else "worker:pesado"
         self.last = 0.0
+        self.beat = 0.0
 
     def __call__(self, frac: float, msg: str = "") -> None:
         t = time.time()
         if t - self.last < 1.0 and frac < 1.0:
             return
         self.last = t
+        if t - self.beat > 10:
+            db.heartbeat(self.lane)
+            self.beat = t
         db.ex("UPDATE jobs SET progress=?, message=? WHERE id=?",
               round(min(max(frac, 0), 1), 4), msg, self.job_id)
 
 
-def claim():
+def claim(types: tuple[str, ...]):
+    marks = ",".join("?" * len(types))
     return db.q1(
         "UPDATE jobs SET status='running', started_at=?, message='Iniciando' "
-        "WHERE id=(SELECT id FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1) "
-        "RETURNING *", db.now())
+        f"WHERE id=(SELECT id FROM jobs WHERE status='queued' AND type IN ({marks}) "
+        "ORDER BY created_at LIMIT 1) RETURNING *", db.now(), *types)
 
 
 def do_ingest(job, prog: Progress) -> dict:
@@ -126,6 +132,41 @@ def do_render(job, prog: Progress) -> dict:
 
 HANDLERS = {"ingest": do_ingest, "transcribe": do_transcribe, "render": do_render}
 
+# Dos carriles independientes: la ingesta (rápida) nunca espera detrás de una
+# transcripción o un render largos.
+LANES = {"rapido": ("ingest",), "pesado": ("transcribe", "render")}
+
+
+def run_job(job) -> None:
+    prog = Progress(job["id"], job["type"])
+    print(f"[worker] {job['type']} {job['id']}", flush=True)
+    try:
+        result = HANDLERS[job["type"]](job, prog)
+        db.ex("UPDATE jobs SET status='done', progress=1, message='Completado', result=?, "
+              "finished_at=? WHERE id=?", db.jdump(result), db.now(), job["id"])
+    except Exception as e:  # noqa: BLE001 - se informa al usuario
+        traceback.print_exc()
+        msg = str(e).strip().splitlines()[-1][:500] if str(e).strip() else type(e).__name__
+        db.ex("UPDATE jobs SET status='error', message=?, finished_at=? WHERE id=?",
+              msg, db.now(), job["id"])
+        if job["type"] == "ingest" and job["media_id"]:
+            db.ex("UPDATE media SET status='error' WHERE id=?", job["media_id"])
+
+
+def lane_loop(name: str, types: tuple[str, ...]) -> None:
+    last_beat = 0.0
+    while not _stop:
+        if time.time() - last_beat > 10:
+            db.heartbeat(f"worker:{name}")
+            last_beat = time.time()
+        job = claim(types)
+        if not job:
+            time.sleep(config.WORKER_POLL_SECONDS)
+            continue
+        run_job(job)
+        db.heartbeat(f"worker:{name}")
+        last_beat = time.time()
+
 
 def main() -> None:
     signal.signal(signal.SIGTERM, _sig)
@@ -136,25 +177,14 @@ def main() -> None:
           "finished_at=? WHERE status='running'", db.now())
     db.ex("UPDATE media SET status='error' WHERE status='processing' AND id NOT IN "
           "(SELECT media_id FROM jobs WHERE type='ingest' AND status='queued' AND media_id IS NOT NULL)")
-    print(f"[worker] listo (pid {os.getpid()}), modelo Whisper: {config.WHISPER_MODEL}", flush=True)
-    while not _stop:
-        job = claim()
-        if not job:
-            time.sleep(config.WORKER_POLL_SECONDS)
-            continue
-        prog = Progress(job["id"])
-        print(f"[worker] {job['type']} {job['id']}", flush=True)
-        try:
-            result = HANDLERS[job["type"]](job, prog)
-            db.ex("UPDATE jobs SET status='done', progress=1, message='Completado', result=?, "
-                  "finished_at=? WHERE id=?", db.jdump(result), db.now(), job["id"])
-        except Exception as e:  # noqa: BLE001 - se informa al usuario
-            traceback.print_exc()
-            msg = str(e).strip().splitlines()[-1][:500] if str(e).strip() else type(e).__name__
-            db.ex("UPDATE jobs SET status='error', message=?, finished_at=? WHERE id=?",
-                  msg, db.now(), job["id"])
-            if job["type"] == "ingest" and job["media_id"]:
-                db.ex("UPDATE media SET status='error' WHERE id=?", job["media_id"])
+    print(f"[worker] listo (pid {os.getpid()}), carriles: {', '.join(LANES)}; "
+          f"modelo Whisper: {config.WHISPER_MODEL}", flush=True)
+    threads = [threading.Thread(target=lane_loop, args=(n, t), name=n, daemon=True)
+               for n, t in LANES.items()]
+    for th in threads:
+        th.start()
+    while not _stop and any(th.is_alive() for th in threads):
+        time.sleep(1)
     print("[worker] detenido", flush=True)
 
 

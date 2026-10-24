@@ -61,7 +61,9 @@ def probe(path: str | Path) -> dict:
         # Grabaciones WebM de MediaRecorder a veces no traen duración en el contenedor
         dur = _decode_duration(path)
     return {"kind": kind, "duration": round(dur, 3), "width": w, "height": h,
-            "fps": round(fps, 3), "has_audio": a is not None}
+            "fps": round(fps, 3), "has_audio": a is not None,
+            "vcodec": (v or {}).get("codec_name"), "pix_fmt": (v or {}).get("pix_fmt"),
+            "acodec": (a or {}).get("codec_name"), "rotated": rot == 90}
 
 
 def _decode_duration(path) -> float:
@@ -117,11 +119,23 @@ def make_proxy(media_id: str, src: str, info: dict,
                     "-vf", "scale='min(1920,iw)':-2", str(dst)])
         return str(dst)
     dst = PROXY_DIR / f"{media_id}.mp4"
+    # Vía rápida: si el archivo ya es H.264 4:2:0 ≤1080p con audio AAC/MP3 (lo habitual en
+    # celulares, cámaras y OBS), el navegador lo reproduce tal cual: solo se re-empaqueta
+    # (segundos en lugar de minutos).
+    if (info.get("vcodec") == "h264" and info.get("pix_fmt") in ("yuv420p", "yuvj420p")
+            and info["height"] <= 1080 and not info.get("rotated")
+            and info.get("acodec") in (None, "aac", "mp3")):
+        try:
+            run_ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+                        "-movflags", "+faststart", str(dst)], info["duration"], on_progress)
+            return str(dst)
+        except FFmpegError:
+            dst.unlink(missing_ok=True)
     fps = info["fps"] or 30
     gop = max(1, round(fps))
     args = ["-i", src, "-map", "0:v:0", "-map", "0:a:0?",
             "-vf", "scale=-2:'min(720,ih)',format=yuv420p",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-c:v", "libx264", "-preset", "superfast", "-crf", "27", "-threads", "0",
             "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0",
             "-c:a", "aac", "-b:a", "128k", "-ac", "2",
             "-movflags", "+faststart", str(dst)]
