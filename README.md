@@ -36,14 +36,24 @@ Navegador ──HTTPS──> Traefik (Dokploy) ──> web (FastAPI + uvicorn, p
 
 ## Despliegue con Dokploy
 
-1. **Subir el código a GitHub**, por ejemplo al repositorio `PGBeermann/estudio-video`.
-2. En Dokploy: **Create Project → Create Service → Compose**. Elija el proveedor GitHub, el repositorio y la rama, con *Compose Path* `./docker-compose.yml`.
-3. En la pestaña **Environment**, copie el contenido de `.env.example` y cambie `ADMIN_PASSWORD` por una clave larga.
-4. En la pestaña **Domains**, agregue el dominio (p. ej. `video.vipcursos.cloud`): servicio **web**, puerto **8000**, HTTPS con Let's Encrypt. Cree antes el registro DNS tipo A hacia la IP del VPS.
-5. Pulse **Deploy**. La primera construcción tarda varios minutos.
-6. Abra el dominio e ingrese con `ADMIN_USER` / `ADMIN_PASSWORD`. Desde el panel puede crear las cuentas de los docentes.
+Hay dos formas válidas. En ambas, **los datos deben ir en un volumen persistente montado en `/data`**; sin él, cada redepliegue borra proyectos, medios y usuarios.
 
-La primera transcripción descarga el modelo Whisper elegido (unos 480 MB para `small`) y lo guarda en el volumen; las siguientes no lo descargan de nuevo.
+### Opción A — Aplicación (un contenedor)
+
+1. **Create Service → Application**, proveedor GitHub, repositorio `PGBeermann/videoeditor`, rama `main`, *Build Type* **Dockerfile**.
+2. **Environment:** pegue el contenido de `.env.example` y cambie `ADMIN_PASSWORD`.
+3. **Advanced → Volumes → Add Volume:** tipo *Volume Mount*, nombre `videoeditor-data`, *Mount Path* `/data`.
+4. **Domains:** dominio (p. ej. `videoeditor.vipcursos.cloud`), puerto **8000**, HTTPS.
+5. **Deploy.** El contenedor ejecuta el servidor web y el procesador de trabajos (`app/run.py`), y reinicia el procesador si falla.
+
+### Opción B — Compose (web y worker separados)
+
+1. **Create Service → Compose**, el mismo repositorio, *Compose Path* `./docker-compose.yml`.
+2. **Environment:** como en la opción A. El volumen `estudio-data` ya está declarado en el compose.
+3. **Domains:** servicio **web**, puerto **8000**, HTTPS.
+4. **Deploy.**
+
+La primera transcripción descarga el modelo Whisper elegido (unos 480 MB para `small`) y lo guarda en el volumen.
 
 ### Recursos recomendados del VPS
 
