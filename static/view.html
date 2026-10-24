@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video</title>
+<link rel="stylesheet" href="/static/player/player.css">
+</head>
+<body>
+<div id="player"></div>
+<script src="/static/player/player.js"></script>
+<script>
+(function () {
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var api = '/api/public/' + encodeURIComponent(token);
+  fetch(api).then(function (r) { if (!r.ok) throw new Error(); return r.json(); }).then(function (cfg) {
+    document.title = cfg.title;
+    cfg.mode = 'public'; cfg.api = api;
+    EVPlayer.mount(document.getElementById('player'), cfg);
+  }).catch(function () {
+    document.getElementById('player').innerHTML = '<p style="padding:40px;text-align:center">Este video no está disponible o el enlace fue desactivado.</p>';
+  });
+})();
+</script>
+</body>
+</html>

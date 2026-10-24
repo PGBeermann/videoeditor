@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor — Estudio de Video Educativo</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/editor.css">
+</head>
+<body>
+<div id="app">
+  <header class="ed-top">
+    <a class="btn ghost sm" href="/" title="Volver a proyectos">← Proyectos</a>
+    <input id="projName" class="proj-name" aria-label="Nombre del proyecto" maxlength="120">
+    <span id="saveState" class="badge">—</span>
+    <span id="roleBadge" class="badge warn hidden"></span>
+    <div class="grow"></div>
+    <button class="btn sm icon" id="btnUndo" title="Deshacer (Ctrl+Z)">↶</button>
+    <button class="btn sm icon" id="btnRedo" title="Rehacer (Ctrl+Shift+Z)">↷</button>
+    <button class="btn sm" id="btnHelp" title="Atajos de teclado">Atajos</button>
+    <button class="btn sm" id="btnShare">Compartir</button>
+    <a class="btn sm rec" id="btnRecord">● Grabar</a>
+    <button class="btn sm primary" id="btnExport">Exportar</button>
+  </header>
+
+  <aside class="ed-side">
+    <nav class="tabs" role="tablist">
+      <button data-tab="media" class="active" role="tab">Medios</button>
+      <button data-tab="text" role="tab">Texto</button>
+      <button data-tab="layers" role="tab">Capas</button>
+      <button data-tab="audio" role="tab">Audio</button>
+      <button data-tab="marks" role="tab">Lección</button>
+      <button data-tab="comments" role="tab">Revisión</button>
+      <button data-tab="exports" role="tab">Exportados</button>
+    </nav>
+
+    <section class="panel" data-panel="media">
+      <div class="drop" id="drop">
+        <b>Arrastre aquí videos, audio o imágenes</b>
+        <span class="muted small">o</span>
+        <label class="btn sm primary">Elegir archivos<input type="file" id="fileInput" multiple accept="video/*,audio/*,image/*" hidden></label>
+        <label class="chk small"><input type="checkbox" id="autoTx" checked> Transcribir automáticamente (español)</label>
+      </div>
+      <div class="row" style="margin:10px 0 6px">
+        <h4 class="grow">Biblioteca</h4>
+        <button class="btn sm" id="btnTitleCard" title="Crea una portada con identidad UNACHI">+ Portada</button>
+      </div>
+      <div id="mediaList" class="media-list"></div>
+      <p class="muted small">Doble clic o «+» para añadir a la línea de tiempo en la posición del cabezal. Los audios se añaden como música de fondo.</p>
+    </section>
+
+    <section class="panel hidden" data-panel="text">
+      <div class="row wrap" style="gap:6px">
+        <button class="btn sm" id="btnCutSel" title="Elimina del video el fragmento seleccionado (Supr)">✂ Eliminar selección</button>
+        <button class="btn sm" id="btnFillers">Marcar muletillas</button>
+        <div class="row" style="gap:4px"><button class="btn sm" id="btnSilences">Recortar silencios &gt;</button>
+          <input type="number" id="silenceSec" value="0.8" min="0.3" max="5" step="0.1" style="width:64px;min-height:26px;padding:2px 6px"><span class="small muted">s</span></div>
+      </div>
+      <p class="muted small" style="margin:8px 0">Seleccione palabras arrastrando o con Mayús+clic, y elimínelas: el video se recorta solo. Doble clic sobre una palabra para corregirla en los subtítulos.</p>
+      <input type="search" id="txSearch" placeholder="Buscar en la transcripción…">
+      <div id="transcript" class="transcript" tabindex="0"></div>
+    </section>
+
+    <section class="panel hidden" data-panel="layers">
+      <p class="muted small" style="margin-top:0">Las capas se colocan en el cabezal y duran 5 s. Arrástrelas en la vista previa para ubicarlas.</p>
+      <div class="layer-grid" id="layerButtons"></div>
+      <h4 style="margin:16px 0 6px">Zoom animado</h4>
+      <p class="muted small" style="margin:0 0 8px">Acerca la imagen a un área (útil para pantallas de software y fórmulas pequeñas).</p>
+      <button class="btn sm" id="btnZoom">+ Zoom en el cabezal</button>
+      <h4 style="margin:16px 0 6px">Logo institucional</h4>
+      <div class="col">
+        <label class="btn sm" style="align-self:flex-start">Subir logo (PNG/JPG)<input type="file" id="logoInput" accept="image/*" hidden></label>
+        <div class="grid3">
+          <label class="f"><span>Posición</span><select id="logoPos"><option value="tr">Arriba der.</option><option value="tl">Arriba izq.</option><option value="br">Abajo der.</option><option value="bl">Abajo izq.</option></select></label>
+          <label class="f"><span>Tamaño</span><input type="range" id="logoSize" min="0.05" max="0.3" step="0.01"></label>
+          <label class="f"><span>Opacidad</span><input type="range" id="logoOpacity" min="0.2" max="1" step="0.05"></label>
+        </div>
+        <button class="btn sm danger" id="logoRemove" style="align-self:flex-start">Quitar logo</button>
+      </div>
+    </section>
+
+    <section class="panel hidden" data-panel="audio">
+      <h4>Voz del docente</h4>
+      <div class="col" style="margin-top:8px">
+        <label class="f"><span>Reducción de ruido</span>
+          <select id="aDenoise"><option value="off">Desactivada</option><option value="light">Suave (ventilador, aire acondicionado)</option><option value="strong">Intensa (aula ruidosa, red neuronal RNNoise)</option></select></label>
+        <label class="chk"><input type="checkbox" id="aHighpass"> Filtro paso alto 80 Hz (elimina retumbe y golpes)</label>
+        <label class="chk"><input type="checkbox" id="aDeess"> De-esser (suaviza las «s» silbantes)</label>
+        <label class="chk"><input type="checkbox" id="aCompress"> Compresor (nivela voz fuerte y débil)</label>
+        <label class="f"><span>Ganancia de voz: <b id="aGainV">0</b> dB</span><input type="range" id="aGain" min="-12" max="12" step="1"></label>
+        <label class="f"><span>Sonoridad final (norma EBU R128 / ITU-R BS.1770)</span>
+          <select id="aLoud"><option value="-14">−14 LUFS · YouTube / redes</option><option value="-16">−16 LUFS · Plataformas educativas (recomendado)</option><option value="-23">−23 LUFS · Difusión TV (EBU R128)</option></select></label>
+      </div>
+      <h4 style="margin-top:18px">Música de fondo</h4>
+      <p class="muted small">Suba un audio en «Medios» y añádalo. La música baja automáticamente cuando usted habla (ducking).</p>
+      <div id="musicList" class="col"></div>
+      <h4 style="margin-top:18px">Subtítulos</h4>
+      <div class="col" style="margin-top:8px">
+        <label class="chk"><input type="checkbox" id="cSoft"> Pista de subtítulos activable en el MP4 (recomendado, WCAG 2.1 · 1.2.2)</label>
+        <label class="chk"><input type="checkbox" id="cBurn"> Incrustar subtítulos en la imagen (para redes sociales)</label>
+        <label class="row small"><span class="muted">Color del texto</span><input type="color" id="cColor"></label>
+      </div>
+    </section>
+
+    <section class="panel hidden" data-panel="marks">
+      <div class="row"><h4 class="grow">Capítulos</h4><button class="btn sm" id="btnChapter">+ En el cabezal (M)</button></div>
+      <div id="chapterList" class="col" style="margin:8px 0 18px"></div>
+      <div class="row"><h4 class="grow">Preguntas interactivas</h4><button class="btn sm" id="btnQuiz">+ En el cabezal</button></div>
+      <p class="muted small" style="margin:4px 0 8px">El video se pausa y el estudiante responde. Funciona en el enlace público y en el paquete SCORM para Moodle (con calificación).</p>
+      <div id="quizList" class="col" style="margin-bottom:18px"></div>
+      <h4>Teleprompter</h4>
+      <p class="muted small" style="margin:4px 0 8px">Guion que verá al grabar (no aparece en el video).</p>
+      <textarea id="teleText" rows="8" placeholder="Escriba o pegue el guion de la clase…"></textarea>
+    </section>
+
+    <section class="panel hidden" data-panel="comments">
+      <p class="muted small" style="margin-top:0">Comentarios anclados al tiempo, para revisión entre colegas o coordinación. Comparta el proyecto con rol «revisor» para que otros comenten sin editar.</p>
+      <div class="row"><textarea id="commentText" rows="2" placeholder="Comentario en el tiempo actual…" class="grow"></textarea></div>
+      <button class="btn sm primary" id="btnComment" style="margin:6px 0 12px">Comentar en <span id="commentAt" class="mono">0:00</span></button>
+      <div id="commentList" class="col"></div>
+    </section>
+
+    <section class="panel hidden" data-panel="exports">
+      <div id="exportList" class="col"></div>
+    </section>
+  </aside>
+
+  <main class="ed-center">
+    <div class="stage-wrap" id="stageWrap">
+      <div class="stage" id="stage">
+        <div class="zoomer" id="zoomer">
+          <video id="vid" playsinline preload="auto"></video>
+          <img id="still" class="hidden" alt="">
+        </div>
+        <div class="layers" id="layersBox"></div>
+        <div class="caption hidden" id="caption"></div>
+        <div class="stage-empty" id="stageEmpty"><b>La línea de tiempo está vacía</b><span class="muted">Suba o grabe un video y añádalo con doble clic.</span></div>
+        <div class="zoom-pick hidden" id="zoomPick">Haga clic en el punto que desea ampliar</div>
+      </div>
+    </div>
+    <div class="transport">
+      <button class="btn sm icon" id="btnStart" title="Inicio (Inicio)">⏮</button>
+      <button class="btn sm icon" id="btnBack" title="−5 s (J)">«</button>
+      <button class="btn icon primary" id="btnPlay" title="Reproducir / pausar (Espacio)">▶</button>
+      <button class="btn sm icon" id="btnFwd" title="+5 s (L)">»</button>
+      <span class="mono tc"><span id="tcNow">0:00.0</span> <span class="muted">/ <span id="tcDur">0:00</span></span></span>
+      <div class="grow"></div>
+      <button class="btn sm" id="btnSplit" title="Dividir clip en el cabezal (S)">✂ Dividir</button>
+      <label class="chk small"><input type="checkbox" id="showCaps" checked> Subtítulos</label>
+      <select id="rate" class="sm-select" title="Velocidad de vista previa"><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select>
+    </div>
+  </main>
+
+  <aside class="ed-insp" id="inspector">
+    <div class="insp-empty muted">
+      <h4 style="color:var(--text)">Inspector</h4>
+      <p class="small">Seleccione un clip, capa, zoom o música en la línea de tiempo para editar sus propiedades.</p>
+      <div class="card proj-stats" id="projStats"></div>
+    </div>
+  </aside>
+
+  <footer class="ed-tl">
+    <div class="tl-bar">
+      <span class="small muted">Línea de tiempo</span>
+      <div class="grow"></div>
+      <span class="small muted">Zoom</span>
+      <input type="range" id="tlZoom" min="4" max="200" value="40" style="width:140px">
+      <button class="btn sm" id="tlFit">Ajustar</button>
+    </div>
+    <div class="tl-scroll" id="tlScroll">
+      <div class="tl-inner" id="tlInner">
+        <div class="tl-ruler" id="tlRuler"></div>
+        <div class="tl-track" data-track="marks"><span class="tl-label">Marcas</span></div>
+        <div class="tl-track" data-track="overlays"><span class="tl-label">Capas</span></div>
+        <div class="tl-track" data-track="zooms"><span class="tl-label">Zoom</span></div>
+        <div class="tl-track tl-main" data-track="clips"><span class="tl-label">Video</span></div>
+        <div class="tl-track" data-track="music"><span class="tl-label">Música</span></div>
+        <div class="tl-playhead" id="playhead"></div>
+      </div>
+    </div>
+  </footer>
+
+  <div class="jobs card hidden" id="jobsBox"></div>
+</div>
+
+<dialog id="dlgExport">
+  <form method="dialog" id="exportForm">
+    <div class="dlg-h"><h3>Exportar video</h3></div>
+    <div class="dlg-b">
+      <label class="f"><span>Título</span><input type="text" name="title" maxlength="150"></label>
+      <div class="grid2">
+        <label class="f"><span>Formato</span>
+          <select name="format"><option value="16:9">16:9 · Clase, YouTube, Moodle</option><option value="9:16">9:16 · Reels / TikTok / Shorts</option><option value="1:1">1:1 · Cuadrado</option></select></label>
+        <label class="f"><span>Si cambia la proporción</span>
+          <select name="reframe"><option value="blur">Encajar con fondo desenfocado</option><option value="crop">Recortar al centro</option></select></label>
+      </div>
+      <div class="grid2">
+        <label class="f"><span>Resolución</span><select name="height"><option value="">Completa (1080p)</option><option value="720">720p (archivo más liviano)</option></select></label>
+        <label class="f"><span>Calidad</span><select name="crf"><option value="18">Máxima (CRF 18)</option><option value="20" selected>Alta (CRF 20)</option><option value="23">Estándar (CRF 23)</option></select></label>
+      </div>
+      <label class="chk"><input type="checkbox" name="burn"> Incrustar subtítulos en la imagen</label>
+      <label class="chk"><input type="checkbox" name="soft" checked> Incluir pista de subtítulos activable + archivos SRT/VTT</label>
+      <p class="muted small" style="margin:0">El render se hace en el servidor; puede cerrar esta página. Se normaliza el audio a la sonoridad elegida, se aplican capítulos y se genera la portada del video.</p>
+    </div>
+    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancelar</button><button class="btn primary" value="ok">Iniciar render</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgShare">
+  <div class="dlg-h"><h3>Compartir proyecto</h3></div>
+  <div class="dlg-b">
+    <p class="muted small" style="margin:0">«Editor» puede modificar el proyecto; «Revisor» solo puede ver y comentar.</p>
+    <div class="row"><input type="text" id="shareUser" placeholder="Nombre de usuario" class="grow">
+      <select id="shareRole" style="width:120px"><option value="editor">Editor</option><option value="revisor">Revisor</option></select>
+      <button class="btn primary" id="shareAdd">Agregar</button></div>
+    <div id="shareList" class="col"></div>
+  </div>
+  <div class="dlg-f"><button class="btn" onclick="this.closest('dialog').close()">Cerrar</button></div>
+</dialog>
+
+<dialog id="dlgTitle">
+  <form method="dialog" id="titleForm">
+    <div class="dlg-h"><h3>Portada de la lección</h3></div>
+    <div class="dlg-b">
+      <label class="f"><span>Título</span><input type="text" name="title" required></label>
+      <label class="f"><span>Subtítulo</span><input type="text" name="subtitle" placeholder="Ej.: Química Orgánica I · Tema 3"></label>
+      <div class="grid2">
+        <label class="f"><span>Docente</span><input type="text" name="author"></label>
+        <label class="f"><span>Institución</span><input type="text" name="institution" value="Universidad Autónoma de Chiriquí"></label>
+      </div>
+      <label class="f"><span>Duración (s)</span><input type="number" name="dur" value="4" min="1" max="20" step="0.5"></label>
+    </div>
+    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancelar</button><button class="btn primary" value="ok">Crear y añadir al inicio</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgAnalytics" style="width:min(720px,calc(100vw - 32px))">
+  <div class="dlg-h"><h3 id="anTitle">Analítica</h3></div>
+  <div class="dlg-b" id="anBody"></div>
+  <div class="dlg-f"><button class="btn" onclick="this.closest('dialog').close()">Cerrar</button></div>
+</dialog>
+
+<dialog id="dlgHelp">
+  <div class="dlg-h"><h3>Atajos de teclado</h3></div>
+  <div class="dlg-b small">
+    <table class="keys">
+      <tr><td><kbd>Espacio</kbd></td><td>Reproducir / pausar</td></tr>
+      <tr><td><kbd>J</kbd> <kbd>L</kbd></td><td>Retroceder / avanzar 5 s</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Un cuadro atrás / adelante (con Mayús: 1 s)</td></tr>
+      <tr><td><kbd>S</kbd></td><td>Dividir el clip en el cabezal</td></tr>
+      <tr><td><kbd>Supr</kbd></td><td>Eliminar el elemento seleccionado o las palabras seleccionadas</td></tr>
+      <tr><td><kbd>M</kbd></td><td>Agregar capítulo</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Mayús</kbd>+<kbd>Z</kbd></td><td>Deshacer / rehacer</td></tr>
+      <tr><td><kbd>Inicio</kbd> / <kbd>Fin</kbd></td><td>Ir al comienzo / final</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Quitar selección</td></tr>
+    </table>
+  </div>
+  <div class="dlg-f"><button class="btn" onclick="this.closest('dialog').close()">Cerrar</button></div>
+</dialog>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/layers.js"></script>
+<script src="/static/js/editor.js"></script>
+</body>
+</html>

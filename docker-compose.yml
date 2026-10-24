@@ -1,0 +1,43 @@
+# Despliegue con Dokploy (tipo «Docker Compose»).
+# Las variables se definen en la pestaña «Environment» de Dokploy (se guardan en .env).
+# El dominio se asigna en la pestaña «Domains» al servicio «web», puerto 8000.
+
+services:
+  web:
+    build: .
+    image: estudio-video:latest
+    restart: unless-stopped
+    environment:
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Defina ADMIN_PASSWORD en Environment}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-8192}
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+    volumes:
+      - estudio-data:/data
+    expose:
+      - "8000"
+
+  worker:
+    build: .
+    image: estudio-video:latest
+    restart: unless-stopped
+    command: ["python", "-m", "app.worker"]
+    healthcheck:
+      disable: true
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_COMPUTE: ${WHISPER_COMPUTE:-int8}
+      WHISPER_THREADS: ${WHISPER_THREADS:-0}
+      RENDER_CRF: ${RENDER_CRF:-20}
+      RENDER_PRESET: ${RENDER_PRESET:-veryfast}
+    volumes:
+      - estudio-data:/data
+    # Límite opcional para que el render no agote la memoria del VPS:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "3"
+    #       memory: 6g
+
+volumes:
+  estudio-data:

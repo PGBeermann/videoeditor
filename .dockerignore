@@ -1,0 +1,10 @@
+.git
+.github
+**/__pycache__
+**/*.pyc
+.env
+static/vendor
+models
+tests
+*.md
+!README.md

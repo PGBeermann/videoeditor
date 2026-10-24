@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estudio de Video Educativo</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+  .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    background: radial-gradient(900px 500px at 15% 0%, rgba(74,119,41,.22), transparent 60%),
+                radial-gradient(700px 400px at 100% 100%, rgba(166,25,46,.14), transparent 60%), var(--bg); }
+  .login { width: min(380px, 100%); padding: 28px; display: flex; flex-direction: column; gap: 16px; }
+  .login h1 { font-size: 20px; }
+  header.top { display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+    border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  main.dash { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
+  .dash-h { display: flex; align-items: end; gap: 12px; margin-bottom: 18px; }
+  .dash-h h2 { font-size: 22px; }
+  .projects { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+  .pcard { padding: 16px; display: flex; flex-direction: column; gap: 10px; cursor: pointer;
+    transition: border-color .12s, transform .12s; min-height: 132px; }
+  .pcard:hover { border-color: var(--green-hi); transform: translateY(-1px); }
+  .pcard h3 { font-size: 15px; line-height: 1.3; word-break: break-word; }
+  .pcard .meta { margin-top: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .empty { padding: 48px 24px; text-align: center; border: 1px dashed var(--line-2); border-radius: 12px; }
+  .empty p { max-width: 460px; margin: 8px auto 16px; }
+  table.users { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.users th, table.users td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  table.users th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  section.admin { margin-top: 40px; padding: 18px; }
+  .fmt-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .fmt-pick label { border: 1px solid var(--line-2); border-radius: 8px; padding: 10px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .fmt-pick input { display: none; }
+  .fmt-pick input:checked + .shape { border-color: var(--green-hi); background: var(--green-soft); }
+  .fmt-pick label:has(input:checked) { border-color: var(--green-hi); color: var(--text); }
+  .shape { border: 2px solid var(--line-2); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div id="loginView" class="login-wrap hidden">
+  <form class="card login" id="loginForm">
+    <div class="brandmark"><div class="logo"></div><div><b>Estudio de Video Educativo</b><small>Universidad Autónoma de Chiriquí</small></div></div>
+    <h1>Iniciar sesión</h1>
+    <label class="f"><span>Usuario</span><input type="text" name="username" autocomplete="username" required autofocus></label>
+    <label class="f"><span>Contraseña</span><input type="password" name="password" autocomplete="current-password" required></label>
+    <button class="btn primary" type="submit">Entrar</button>
+    <p class="muted small" id="loginErr" role="alert"></p>
+  </form>
+</div>
+
+<div id="dashView" class="hidden">
+  <header class="top">
+    <div class="brandmark"><div class="logo"></div><div><b>Estudio de Video Educativo</b><small>UNACHI</small></div></div>
+    <div class="grow"></div>
+    <span class="muted" id="whoami"></span>
+    <button class="btn ghost sm" id="btnPass">Cambiar contraseña</button>
+    <button class="btn sm" id="btnLogout">Salir</button>
+  </header>
+  <main class="dash">
+    <div class="dash-h">
+      <div class="grow"><h2>Mis proyectos</h2><p class="muted small" style="margin:4px 0 0">Cada proyecto es una lección: grabe o suba sus clips, edítelos y exporte.</p></div>
+      <button class="btn primary" id="btnNew">+ Nuevo proyecto</button>
+    </div>
+    <div id="projects" class="projects"></div>
+
+    <section class="card admin hidden" id="adminBox">
+      <div class="row" style="margin-bottom:12px"><h3 class="grow">Usuarios (administración)</h3>
+        <button class="btn sm" id="btnAddUser">+ Agregar usuario</button></div>
+      <table class="users"><thead><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="usersBody"></tbody></table>
+    </section>
+  </main>
+</div>
+
+<dialog id="dlgNew">
+  <form method="dialog" id="newForm">
+    <div class="dlg-h"><h3>Nuevo proyecto</h3></div>
+    <div class="dlg-b">
+      <label class="f"><span>Nombre de la lección</span><input type="text" name="name" required maxlength="120" placeholder="Ej.: Nomenclatura de alcanos — Parte 1"></label>
+      <div class="f"><span class="muted small" style="font-weight:560">Formato principal</span>
+        <div class="fmt-pick">
+          <label><input type="radio" name="format" value="16:9" checked><div class="shape" style="width:48px;height:27px"></div>16:9 · Clase / LMS</label>
+          <label><input type="radio" name="format" value="9:16"><div class="shape" style="width:20px;height:36px"></div>9:16 · Reels</label>
+          <label><input type="radio" name="format" value="1:1"><div class="shape" style="width:30px;height:30px"></div>1:1 · Cuadrado</label>
+        </div>
+        <span class="muted small">Desde un proyecto 16:9 también podrá exportar versiones 9:16 y 1:1.</span>
+      </div>
+    </div>
+    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancelar</button><button class="btn primary" value="ok">Crear</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgUser">
+  <form method="dialog" id="userForm">
+    <div class="dlg-h"><h3 id="userTitle">Agregar usuario</h3></div>
+    <div class="dlg-b">
+      <div class="grid2">
+        <label class="f"><span>Usuario</span><input type="text" name="username" pattern="[A-Za-z0-9._@\-]{3,40}" required></label>
+        <label class="f"><span>Nombre completo</span><input type="text" name="name"></label>
+      </div>
+      <div class="grid2">
+        <label class="f"><span>Contraseña (mín. 8)</span><input type="password" name="password" minlength="8" autocomplete="new-password"></label>
+        <label class="f"><span>Rol</span><select name="role"><option value="docente">Docente</option><option value="admin">Administrador</option></select></label>
+      </div>
+    </div>
+    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancelar</button><button class="btn primary" value="ok">Guardar</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlgPass">
+  <form method="dialog" id="passForm">
+    <div class="dlg-h"><h3>Cambiar contraseña</h3></div>
+    <div class="dlg-b">
+      <label class="f"><span>Contraseña actual</span><input type="password" name="current" required autocomplete="current-password"></label>
+      <label class="f"><span>Nueva contraseña (mín. 8)</span><input type="password" name="new" minlength="8" required autocomplete="new-password"></label>
+    </div>
+    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancelar</button><button class="btn primary" value="ok">Guardar</button></div>
+  </form>
+</dialog>
+
+<script src="/static/js/api.js"></script>
+<script>
+'use strict';
+let ME = null, editingUser = null;
+
+async function boot() {
+  try { ME = await API.get('/api/me', { noRedirect: true }); }
+  catch (_) { ME = null; }
+  document.getElementById('loginView').classList.toggle('hidden', !!ME);
+  document.getElementById('dashView').classList.toggle('hidden', !ME);
+  if (!ME) return;
+  const next = new URLSearchParams(location.search).get('next');
+  if (next && next.startsWith('/') && !next.startsWith('//')) { location.href = next; return; }
+  document.getElementById('whoami').textContent = ME.name || ME.username;
+  loadProjects();
+  if (ME.role === 'admin') { document.getElementById('adminBox').classList.remove('hidden'); loadUsers(); }
+}
+
+document.getElementById('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  try {
+    await API.post('/api/login', { username: f.get('username'), password: f.get('password') }, { noRedirect: true });
+    boot();
+  } catch (err) { document.getElementById('loginErr').textContent = err.message; }
+});
+
+document.getElementById('btnLogout').onclick = async () => { await API.post('/api/logout'); location.href = '/'; };
+
+async function loadProjects() {
+  const list = await API.get('/api/projects');
+  const box = document.getElementById('projects');
+  box.innerHTML = '';
+  if (!list.length) {
+    box.style.display = 'block';
+    box.append(el('div', { class: 'empty' },
+      el('h3', {}, 'Aún no tiene proyectos'),
+      el('p', { class: 'muted' }, 'Cree un proyecto para grabar su pantalla y cámara, o para subir videos ya grabados. La transcripción y los subtítulos se generan automáticamente.'),
+      el('button', { class: 'btn primary', onclick: () => document.getElementById('btnNew').click() }, '+ Crear el primero')));
+    return;
+  }
+  box.style.display = '';
+  for (const p of list) {
+    const roleLbl = { owner: null, editor: 'Compartido · editor', revisor: 'Compartido · revisor' }[p.role];
+    box.append(el('div', { class: 'card pcard', tabindex: 0, onclick: () => location.href = '/editor/' + p.id,
+                           onkeydown: e => e.key === 'Enter' && (location.href = '/editor/' + p.id) },
+      el('h3', {}, p.name),
+      el('div', { class: 'muted small' }, 'Modificado ' + new Date(p.updated_at * 1000).toLocaleString('es-PA')),
+      el('div', { class: 'meta' },
+        p.has_video ? el('span', { class: 'badge ok' }, 'Con video') : el('span', { class: 'badge' }, 'Vacío'),
+        roleLbl ? el('span', { class: 'badge warn' }, roleLbl) : null,
+        roleLbl ? el('span', { class: 'muted small' }, p.owner_name || p.owner) : null,
+        el('div', { class: 'grow' }),
+        p.role === 'owner' ? el('button', { class: 'btn sm ghost', title: 'Eliminar proyecto', onclick: async e => {
+          e.stopPropagation();
+          if (!confirm(`¿Eliminar «${p.name}» con todos sus medios y exportaciones? Esta acción no se puede deshacer.`)) return;
+          await API.del('/api/projects/' + p.id); toast('Proyecto eliminado'); loadProjects();
+        } }, 'Eliminar') : null)));
+  }
+}
+
+document.getElementById('btnNew').onclick = () => { document.getElementById('newForm').reset(); document.getElementById('dlgNew').showModal(); };
+document.getElementById('dlgNew').addEventListener('close', async e => {
+  if (e.target.returnValue !== 'ok') return;
+  const f = new FormData(document.getElementById('newForm'));
+  try {
+    const r = await API.post('/api/projects', { name: f.get('name'), format: f.get('format') });
+    location.href = '/editor/' + r.id;
+  } catch (err) { toast(err.message, true); }
+});
+
+async function loadUsers() {
+  const users = await API.get('/api/users');
+  const tb = document.getElementById('usersBody');
+  tb.innerHTML = '';
+  for (const u of users) {
+    tb.append(el('tr', {},
+      el('td', { class: 'mono' }, u.username), el('td', {}, u.name || '—'),
+      el('td', {}, u.role === 'admin' ? 'Administrador' : 'Docente'),
+      el('td', {}, u.active ? el('span', { class: 'badge ok' }, 'Activo') : el('span', { class: 'badge err' }, 'Inactivo')),
+      el('td', { style: { textAlign: 'right' } },
+        el('button', { class: 'btn sm', onclick: () => openUser(u) }, 'Editar'), ' ',
+        u.id !== ME.id ? el('button', { class: 'btn sm ghost', onclick: async () => {
+          await API.patch('/api/users/' + u.id, { active: !u.active }); loadUsers(); } }, u.active ? 'Desactivar' : 'Activar') : null)));
+  }
+}
+
+function openUser(u) {
+  editingUser = u || null;
+  const f = document.getElementById('userForm');
+  f.reset();
+  document.getElementById('userTitle').textContent = u ? 'Editar usuario' : 'Agregar usuario';
+  f.username.value = u ? u.username : ''; f.username.disabled = !!u;
+  f.name.value = u ? (u.name || '') : ''; f.role.value = u ? u.role : 'docente';
+  f.password.required = !u; f.password.placeholder = u ? 'Dejar vacío para no cambiar' : '';
+  document.getElementById('dlgUser').showModal();
+}
+document.getElementById('btnAddUser').onclick = () => openUser(null);
+document.getElementById('dlgUser').addEventListener('close', async e => {
+  if (e.target.returnValue !== 'ok') return;
+  const f = document.getElementById('userForm');
+  try {
+    if (editingUser) {
+      const body = { name: f.name.value, role: f.role.value };
+      if (f.password.value) body.password = f.password.value;
+      await API.patch('/api/users/' + editingUser.id, body);
+    } else {
+      await API.post('/api/users', { username: f.username.value, name: f.name.value, password: f.password.value, role: f.role.value });
+    }
+    toast('Usuario guardado'); loadUsers();
+  } catch (err) { toast(err.message, true); }
+});
+
+document.getElementById('btnPass').onclick = () => { document.getElementById('passForm').reset(); document.getElementById('dlgPass').showModal(); };
+document.getElementById('dlgPass').addEventListener('close', async e => {
+  if (e.target.returnValue !== 'ok') return;
+  const f = new FormData(document.getElementById('passForm'));
+  try { await API.post('/api/me/password', { current: f.get('current'), new: f.get('new') }); toast('Contraseña actualizada'); }
+  catch (err) { toast(err.message, true); }
+});
+
+boot();
+</script>
+</body>
+</html>

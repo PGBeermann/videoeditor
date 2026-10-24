@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grabar — Estudio de Video Educativo</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+  body { overflow: hidden; }
+  .rec-app { display: grid; height: 100vh; grid-template-columns: minmax(0, 1fr) 330px; grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-areas: "top top" "tele side" "stage side" "ctrl side"; }
+  .rec-top { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  .tele { grid-area: tele; background: #000; border-bottom: 1px solid var(--line); position: relative; height: 0; overflow: hidden; transition: height .2s; }
+  .tele.on { height: 26vh; }
+  .tele-text { position: absolute; left: 6%; right: 6%; top: 0; color: #fff; font-weight: 600; line-height: 1.45; white-space: pre-wrap; will-change: transform; }
+  .tele.mirror .tele-text { transform-origin: center; }
+  .tele::after { content: ""; position: absolute; left: 0; right: 0; top: 34%; height: 2px; background: rgba(224,71,93,.6); pointer-events: none; }
+  .tele-fade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(#000 0%, transparent 18%, transparent 70%, #000 100%); }
+  .stage { grid-area: stage; display: grid; place-items: center; background: #0b0c0e; padding: 14px; min-height: 0; position: relative; }
+  #cv { max-width: 100%; max-height: 100%; background: #000; box-shadow: 0 0 0 1px #24292e; touch-action: none; cursor: crosshair; }
+  #review { max-width: 100%; max-height: 100%; background: #000; }
+  .count { position: absolute; inset: 0; display: grid; place-items: center; font-size: 160px; font-weight: 800; color: #fff; text-shadow: 0 8px 40px rgba(0,0,0,.6); pointer-events: none; }
+  .ctrl { grid-area: ctrl; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--panel); border-top: 1px solid var(--line); }
+  .ctrl .timer { font-family: var(--mono); font-size: 18px; min-width: 90px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red-hi); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  .side { grid-area: side; background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+  .side h4 { font-size: 13px; margin-bottom: -4px; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .modes label { border: 1px solid var(--line-2); border-radius: 8px; padding: 8px; cursor: pointer; font-size: 12.5px; display: flex; gap: 6px; align-items: center; }
+  .modes label:has(input:checked) { border-color: var(--green-hi); background: var(--green-soft); }
+  .meter { height: 8px; border-radius: 4px; background: var(--panel-3); overflow: hidden; }
+  .meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--green-hi) 70%, var(--amber) 85%, var(--red-hi)); transition: width .06s; }
+  .pens { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .pen { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; }
+  .pen.on { border-color: #fff; box-shadow: 0 0 0 2px var(--green-hi); }
+  .tip { font-size: 12px; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+</style>
+</head>
+<body>
+<div class="rec-app">
+  <header class="rec-top">
+    <a class="btn ghost sm" id="back">← Volver al editor</a>
+    <b id="projTitle">Grabación</b>
+    <div class="grow"></div>
+    <button class="btn sm" id="btnTele">Teleprompter</button>
+  </header>
+  <div class="tele" id="tele"><div class="tele-text" id="teleText"></div><div class="tele-fade"></div></div>
+  <div class="stage" id="stageBox">
+    <canvas id="cv"></canvas>
+    <video id="review" class="hidden" controls playsinline></video>
+    <div class="count hidden" id="count"></div>
+  </div>
+  <div class="ctrl">
+    <button class="btn rec" id="btnRec">● Grabar</button>
+    <button class="btn hidden" id="btnPause">❚❚ Pausar</button>
+    <button class="btn hidden" id="btnStop">■ Detener</button>
+    <span class="dot hidden" id="recDot"></span>
+    <span class="timer" id="timer">0:00</span>
+    <div class="grow"></div>
+    <button class="btn hidden" id="btnDiscard">Descartar</button>
+    <a class="btn hidden" id="btnSaveLocal" download="grabacion.webm">↓ Guardar copia</a>
+    <button class="btn primary hidden" id="btnUse">Usar esta toma →</button>
+    <div class="progress hidden" id="upProg" style="width:180px"><i></i></div>
+  </div>
+  <aside class="side">
+    <div class="col">
+      <h4>Qué grabar</h4>
+      <div class="modes">
+        <label><input type="radio" name="mode" value="screencam" checked> Pantalla + cámara</label>
+        <label><input type="radio" name="mode" value="screen"> Solo pantalla</label>
+        <label><input type="radio" name="mode" value="cam"> Solo cámara</label>
+        <label><input type="radio" name="mode" value="board"> Pizarra + cámara</label>
+      </div>
+      <button class="btn sm" id="btnScreen">Elegir pantalla o ventana…</button>
+    </div>
+    <div class="col">
+      <h4>Cámara y micrófono</h4>
+      <label class="f"><span>Cámara</span><select id="camSel"></select></label>
+      <label class="f"><span>Micrófono</span><select id="micSel"></select></label>
+      <div class="meter" title="Nivel del micrófono"><i id="meter"></i></div>
+      <label class="chk"><input type="checkbox" id="nsChk" checked> Supresión de ruido del navegador</label>
+      <label class="chk"><input type="checkbox" id="sysChk" checked> Incluir audio de la pantalla/pestaña</label>
+    </div>
+    <div class="col">
+      <h4>Cámara en la esquina</h4>
+      <div class="grid2">
+        <label class="f"><span>Posición</span><select id="pipPos"><option value="br">Abajo der.</option><option value="bl">Abajo izq.</option><option value="tr">Arriba der.</option><option value="tl">Arriba izq.</option></select></label>
+        <label class="f"><span>Forma</span><select id="pipShape"><option value="circle">Círculo</option><option value="rect">Rectángulo</option></select></label>
+      </div>
+      <label class="f"><span>Tamaño</span><input type="range" id="pipSize" min="0.12" max="0.45" step="0.01" value="0.22"></label>
+    </div>
+    <div class="col">
+      <h4>Anotar sobre la imagen</h4>
+      <div class="pens" id="pens"></div>
+      <label class="chk"><input type="checkbox" id="fadeChk" checked> Borrar trazos automáticamente (4 s)</label>
+      <button class="btn sm" id="btnClear" style="align-self:flex-start">Borrar todo (C)</button>
+      <span class="small muted">Dibuje con el ratón o lápiz sobre la vista previa: queda grabado.</span>
+    </div>
+    <div class="col">
+      <h4>Teleprompter</h4>
+      <label class="f"><span>Velocidad</span><input type="range" id="teleSpeed" min="5" max="120" value="35"></label>
+      <label class="f"><span>Tamaño de letra</span><input type="range" id="teleSize" min="18" max="64" value="34"></label>
+      <label class="chk"><input type="checkbox" id="teleMirror"> Espejo (para cristal de teleprompter)</label>
+      <div class="row"><button class="btn sm" id="teleToggle">▶ Desplazar</button><button class="btn sm" id="teleReset">↺ Inicio</button><button class="btn sm" id="teleEdit">Editar guion</button></div>
+      <textarea id="teleArea" class="hidden" rows="8"></textarea>
+    </div>
+    <div class="col">
+      <h4>Calidad</h4>
+      <select id="quality"><option value="8000000">Alta · 8 Mb/s (≈60 MB/min)</option><option value="5000000" selected>Media · 5 Mb/s (≈38 MB/min)</option><option value="2500000">Ligera · 2,5 Mb/s (≈19 MB/min)</option></select>
+    </div>
+    <div class="tip">Consejos: comparta una <b>ventana</b> o pestaña concreta; esta página puede quedar detrás sin detener la grabación. Para sesiones de más de 45 minutos, divida la clase en varias tomas.</div>
+  </aside>
+</div>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/record.js"></script>
+</body>
+</html>
