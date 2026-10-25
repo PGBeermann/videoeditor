@@ -204,18 +204,42 @@ class Renderer:
             fl.append(f"[{cur}]{z}[vz]")
             cur = "vz"
 
-        # Capas gráficas (renderizadas como PNG en el navegador: lo que se ve es lo que se exporta)
-        for i, ov in enumerate(sorted(self.p.get("overlays", []), key=lambda o: o.get("track", 0))):
-            path = self.assets.get(ov.get("asset_id"))
+        # Capas superpuestas, en el orden del proyecto (la última queda encima):
+        #  - gráficas (texto, LaTeX, química, moléculas…) rasterizadas a PNG en el navegador
+        #  - medios superpuestos (type="media"): videos o imágenes de la biblioteca
+        #    (imagen en imagen, B-roll, pantalla dividida)
+        self._fx_audio = []        # audio de videos superpuestos, se mezcla en la etapa de audio
+        for i, ov in enumerate(self.p.get("overlays", [])):
             s, e = max(0.0, float(ov["start"])), min(T, float(ov["end"]))
-            if not path or e - s <= 0.04:
+            if e - s <= 0.04:
                 continue
-            args += ["-framerate", _f(fps), "-loop", "1", "-t", _f(T), "-i", path]
             pw = max(2, int(round(float(ov.get("w", 0.3)) * W0)) // 2 * 2)
             x = int(round(float(ov.get("x", 0)) * W0))
             y = int(round(float(ov.get("y", 0)) * H0))
             fade = min(float(ov.get("fade", 0.25)), (e - s) / 3)
-            chain = f"[{n}:v]scale={pw}:-2:flags=lanczos,format=rgba"
+            if ov.get("type") == "media":
+                mm = self.media.get((ov.get("params") or {}).get("media_id"))
+                if not mm or mm["kind"] not in ("video", "image"):
+                    continue
+                if mm["kind"] == "image":
+                    args += ["-framerate", _f(fps), "-loop", "1", "-t", _f(T), "-i", mm["path"]]
+                    chain = f"[{n}:v]scale={pw}:-2:flags=lanczos,format=rgba"
+                else:
+                    mi = max(0.0, float(ov.get("in", 0)))
+                    length = min(e - s, max(0.05, mm["duration"] - mi))
+                    e = s + length
+                    args += ["-ss", _f(mi), "-t", _f(length), "-i", mm["path"]]
+                    # el video superpuesto empieza en «s» de la línea de tiempo
+                    chain = (f"[{n}:v]fps={_f(fps)},setpts=PTS-STARTPTS+{_f(s)}/TB,"
+                             f"scale={pw}:-2:flags=lanczos,format=rgba")
+                    if mm["has_audio"] and not ov.get("mute"):
+                        self._fx_audio.append((n, mm, float(ov.get("volume", 1.0)), s, length))
+            else:
+                path = self.assets.get(ov.get("asset_id"))
+                if not path:
+                    continue
+                args += ["-framerate", _f(fps), "-loop", "1", "-t", _f(T), "-i", path]
+                chain = f"[{n}:v]scale={pw}:-2:flags=lanczos,format=rgba"
             op = float(ov.get("opacity", 1))
             if op < 0.999:
                 chain += f",colorchannelmixer=aa={_f(op)}"
@@ -311,6 +335,26 @@ class Renderer:
             fl.append(f"[vin]{self._audio_chain()}[voice]")
         else:
             fl.append(f"[0:a]{self._audio_chain()}[voice]")
+        # Sonido de los videos superpuestos: se suma a la voz ya procesada (sin filtros de voz)
+        fx_lbls = []
+        for k, (idx, mm, vol, start, length) in enumerate(self._fx_audio):
+            amap = mm.get("audio_map") or [0]
+            mix = audio_filter(idx, amap, f"fxm{k}")
+            if mix:
+                fl.append(mix)
+            src = f"[fxm{k}]" if mix else f"[{idx}:a:{amap[0]}]"
+            d = int(round(start * 1000))
+            fd = min(0.03, length / 4)
+            fl.append(f"{src}aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS,"
+                      f"volume={_f(vol)},afade=t=in:d={_f(fd)},afade=t=out:st={_f(max(0, length - fd))}:d={_f(fd)},"
+                      f"adelay={d}|{d}[fx{k}]")
+            fx_lbls.append(f"[fx{k}]")
+        if fx_lbls:
+            fl.append(f"[voice]{''.join(fx_lbls)}amix=inputs={len(fx_lbls) + 1}:duration=first:"
+                      f"normalize=0:dropout_transition=0[voicefx]")
+            fl.append("[voicefx]anull[voice2]")
+        else:
+            fl.append("[voice]anull[voice2]")
         if music_lbls:
             if len(music_lbls) > 1:
                 fl.append(f"{''.join(music_lbls)}amix=inputs={len(music_lbls)}:normalize=0:"
@@ -318,14 +362,14 @@ class Renderer:
             else:
                 fl.append(f"{music_lbls[0]}anull[mus]")
             if duck:
-                fl.append("[voice]asplit=2[vmain][vsc]")
+                fl.append("[voice2]asplit=2[vmain][vsc]")
                 fl.append("[mus][vsc]sidechaincompress=threshold=0.02:ratio=10:"
                           "attack=15:release=450:makeup=1[mduck]")
                 fl.append("[vmain][mduck]amix=inputs=2:duration=first:normalize=0[afinal]")
             else:
-                fl.append("[voice][mus]amix=inputs=2:duration=first:normalize=0[afinal]")
+                fl.append("[voice2][mus]amix=inputs=2:duration=first:normalize=0[afinal]")
         else:
-            fl.append("[voice]anull[afinal]")
+            fl.append("[voice2]anull[afinal]")
 
         out = self.wd / "mezz.mkv"
         crf = int(self.opt.get("crf", config.RENDER_CRF))

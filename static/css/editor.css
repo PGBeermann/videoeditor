@@ -98,8 +98,8 @@ body.vertical .stage-wrap { align-items: center; }
 
 .ed-tl { grid-area: tl; background: var(--panel); border-top: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .tl-bar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
-.tl-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; }
-.tl-inner { position: relative; min-width: 100%; height: 100%; padding-left: 70px; }
+.tl-scroll { flex: 1; overflow-x: auto; overflow-y: auto; position: relative; }
+.tl-inner { position: relative; min-width: 100%; min-height: 100%; padding-left: 70px; }
 .tl-ruler { height: 24px; position: relative; border-bottom: 1px solid var(--line); cursor: pointer; }
 .tl-ruler .tick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--line-2); padding-left: 3px;
   font-size: 10px; color: var(--faint); font-family: var(--mono); }
@@ -118,6 +118,8 @@ body.vertical .stage-wrap { align-items: center; }
 .tl-item.clip.img { background-color: #3a3f5e; }
 .tl-item.clip .nm { position: relative; z-index: 1; text-shadow: 0 1px 2px #000; }
 .tl-item.overlay { background: #4b3a6e; }
+.tl-item.overlay.media { background: #2f5d5a; }
+.tl-track { transition: height .12s; }
 .tl-item.zoom { background: #6b4e1f; }
 .tl-item.music { background: #1f4a5e center/100% 70% no-repeat; background-position: 0 100%; }
 .tl-item.music.voice { background-color: #5e3a1f; }

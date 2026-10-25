@@ -219,6 +219,7 @@ function rippleItems(data, a, b, delta) {
   const span = list => list.filter(o => {
     if (o.end <= a) return true;
     if (o.start >= b) { o.start -= d; o.end -= d; return true; }
+    if (o.type === 'media' && o.start > a) o.in = (o.in || 0) + (b - o.start);
     o.start = o.start < a ? o.start : a; o.end = o.end > b ? o.end - d : a;
     return o.end - o.start >= 0.1;
   });
@@ -258,7 +259,11 @@ function splitAt(t) {
     const coll = sk === 'overlay' ? 'overlays' : 'zooms', it = D()[coll].find(x => x.id === S.sel.id);
     if (!it || t <= it.start + 0.1 || t >= it.end - 0.1) { toast('Ubique el cabezal dentro del elemento seleccionado'); return; }
     const nid = uid();
-    change(d => { const o = d[coll].find(x => x.id === it.id); d[coll].push({ ...JSON.parse(JSON.stringify(o)), id: nid, start: t }); o.end = t; });
+    change(d => {
+      const o = d[coll].find(x => x.id === it.id), copy = { ...JSON.parse(JSON.stringify(o)), id: nid, start: t };
+      if (o.type === 'media') copy.in = (o.in || 0) + (t - o.start);
+      d[coll].splice(d[coll].indexOf(o) + 1, 0, copy); o.end = t;
+    });
     select(sk, nid); return;
   }
   const loc0 = locate(t);
@@ -314,6 +319,19 @@ function addMediaToTimeline(m, where = 'playhead', role = 'voice') {
   S.sel = { kind: 'clip', id: clip.id }; renderAll();
 }
 
+/* Video o imagen superpuesto encima de la secuencia principal */
+function overlayMedia(m) {
+  if (m.status !== 'ready') { toast('Espere a que termine de procesarse'); return; }
+  if (!D().clips.length) { toast('Primero añada un clip a la secuencia principal', true); return; }
+  const T = duration(), start = Math.min(S.t, Math.max(0, T - 0.5));
+  const len = m.kind === 'video' ? Math.min(m.duration, Math.max(0.5, T - start)) : Math.min(5, Math.max(0.5, T - start));
+  const ar = m.width && m.height ? m.height / m.width : 9 / 16, w = 0.32;
+  const ov = { id: uid(), type: 'media', params: { media_id: m.id }, start, end: start + len, in: 0,
+               x: 1 - w - 0.03, y: 0.04, w, h: w * ar * W0() / H0(), opacity: 1, fade: 0.2, volume: 1, mute: false };
+  change(d => d.overlays.push(ov));
+  select('overlay', ov.id);
+  toast('Superpuesto en la esquina. Arrástrelo en la vista previa o elija una posición en el inspector.');
+}
 function deleteSelected() {
   if (!S.sel) return;
   const { kind, id } = S.sel;
@@ -403,6 +421,7 @@ function play() {
 function pause() {
   S.playing = false; S.playToken++; $('#btnPlay').textContent = '▶';
   vid.pause(); Object.values(S.musicEls).forEach(a => a.pause());
+  document.querySelectorAll('#layersBox video').forEach(v => v.pause());
 }
 async function startSegment() {
   const loc = locate(S.t);
@@ -468,7 +487,22 @@ function updateStage() {
   // capas
   for (const ov of D().overlays) {
     const img = S.layerEls[ov.id];
-    if (img) img.style.display = (t >= ov.start && t < ov.end) || (S.sel && S.sel.id === ov.id && !S.playing) ? '' : 'none';
+    if (!img) continue;
+    const inside = t >= ov.start && t < ov.end;
+    img.style.display = inside || (S.sel && S.sel.id === ov.id && !S.playing) ? '' : 'none';
+    const v = ov.type === 'media' ? img.querySelector('video') : null;
+    if (v) {                        // video superpuesto: sigue al cabezal y suena
+      const want = (ov.in || 0) + clamp(t - ov.start, 0, ov.end - ov.start);
+      v.muted = !!ov.mute; v.volume = clamp(ov.volume ?? 1, 0, 1);
+      if (S.playing && inside) {
+        if (Math.abs(v.currentTime - want) > 0.3) v.currentTime = want;
+        v.playbackRate = rate();
+        if (v.paused) v.play().catch(() => { });
+      } else {
+        if (!v.paused) v.pause();
+        if (!S.playing && Math.abs(v.currentTime - want) > 0.05 && v.readyState >= 1) v.currentTime = want;
+      }
+    }
   }
   // subtítulos
   const capEl = $('#caption');
@@ -522,9 +556,10 @@ function composeFrame(ctx, W, H) {
   }
   for (const ov of D().overlays) {
     if (!(t >= ov.start && t < ov.end)) continue;
-    const img = S.layerEls[ov.id]?.querySelector('img');
-    if (!img || !img.complete || !img.naturalWidth) continue;
-    const w = ov.w * W, h = w * img.naturalHeight / img.naturalWidth;
+    const img = S.layerEls[ov.id]?.firstElementChild;
+    const nw = img && (img.videoWidth || img.naturalWidth), nh = img && (img.videoHeight || img.naturalHeight);
+    if (!img || !nw || !nh) continue;
+    const w = ov.w * W, h = w * nh / nw;
     ctx.globalAlpha = ov.opacity ?? 1;
     ctx.drawImage(img, ov.x * W, ov.y * H, w, h);
     ctx.globalAlpha = 1;
@@ -592,25 +627,32 @@ function syncLayers() {
   for (const ov of D().overlays) {
     keep.add(ov.id);
     let img = S.layerEls[ov.id];
+    const isMedia = ov.type === 'media', mm = isMedia ? S.media[ov.params?.media_id] : null;
+    const wantTag = isMedia && mm && mm.kind === 'video' ? 'video' : 'img';
+    if (img && img.firstElementChild.tagName.toLowerCase() !== wantTag) { img.remove(); delete S.layerEls[ov.id]; img = null; }
     if (!img) {
-      img = el('div', { class: 'layer' }, el('img', { draggable: 'false', style: { width: '100%', display: 'block' } }));
+      const inner = wantTag === 'video'
+        ? el('video', { playsinline: true, preload: 'auto', style: { width: '100%', display: 'block' } })
+        : el('img', { draggable: 'false', style: { width: '100%', display: 'block' } });
+      img = el('div', { class: 'layer' }, inner);
       img.dataset.id = ov.id;
       img.addEventListener('pointerdown', e => layerPointer(e, ov.id));
-      box.appendChild(img); S.layerEls[ov.id] = img;
+      S.layerEls[ov.id] = img;
     }
-    const url = ov.asset_id ? (S.assetUrl[ov.asset_id] || `/api/assets/${ov.asset_id}`) : null;
-    const im = img.querySelector('img');
+    box.appendChild(img);          // el orden del DOM sigue el orden del proyecto (última = encima)
+    const url = isMedia ? (mm ? proxyUrl(mm.id) : null) : ov.asset_id ? (S.assetUrl[ov.asset_id] || `/api/assets/${ov.asset_id}`) : null;
+    const im = img.firstElementChild;
     if (url && im.dataset.src !== url) { im.src = url; im.dataset.src = url; }
     img.style.left = ov.x * 100 + '%'; img.style.top = ov.y * 100 + '%'; img.style.width = ov.w * 100 + '%';
     img.style.opacity = ov.opacity ?? 1;
     const selected = S.sel && S.sel.id === ov.id;
     img.classList.toggle('sel', selected); img.classList.toggle('editable', canEdit());
-    img.classList.toggle('pending', !ov.asset_id);
+    img.classList.toggle('pending', !isMedia && !ov.asset_id);
     let rs = img.querySelector('.rs');
     if (selected && canEdit() && !rs) { rs = el('div', { class: 'rs' }); img.appendChild(rs); }
     if (!selected && rs) rs.remove();
   }
-  for (const id of Object.keys(S.layerEls)) if (!keep.has(id)) { S.layerEls[id].remove(); delete S.layerEls[id]; }
+  for (const id of Object.keys(S.layerEls)) if (!keep.has(id)) { const v = S.layerEls[id].querySelector('video'); if (v) v.pause(); S.layerEls[id].remove(); delete S.layerEls[id]; }
   // logo
   let logo = $('#logoPrev');
   const b = D().brand;
@@ -656,6 +698,7 @@ function layerPointer(e, id) {
 /* Rasteriza la capa y la sube como PNG */
 const _rasterQueue = {};
 async function rasterize(ov) {
+  if (!ov || ov.type === 'media') return;
   const token = (_rasterQueue[ov.id] || 0) + 1; _rasterQueue[ov.id] = token;
   try {
     const { blob, w, h } = await rasterizeLayer(ov, W0(), H0());
@@ -726,14 +769,19 @@ function renderTimeline() {
     tracks.clips.appendChild(d);
   }
   // capas (con carriles cuando se superponen)
-  laneItems(D().overlays).forEach(({ it, lane, lanes }) => tracks.overlays.appendChild(spanItem('overlay', it, LAYER_TYPES[it.type]?.label || 'Capa', lane, lanes)));
-  laneItems(D().zooms).forEach(({ it, lane, lanes }) => tracks.zooms.appendChild(spanItem('zoom', it, `Zoom ${it.scale.toFixed(1)}×`, lane, lanes)));
-  for (const mu of D().music) {
-    const m = S.media[mu.media_id] || {};
-    const len = (mu.out ?? m.duration ?? 0) - (mu.in || 0);
-    const it = { id: mu.id, start: mu.start, end: mu.start + len };
+  const ovl = laneItems(D().overlays);
+  setTrackLanes(tracks.overlays, ovl[0]?.lanes || 1);
+  ovl.forEach(({ it, lane, lanes }) => { const d = spanItem('overlay', it, layerLabel(it), lane, lanes); if (it.type === 'media') d.classList.add('media'); tracks.overlays.appendChild(d); });
+  const zl = laneItems(D().zooms);
+  setTrackLanes(tracks.zooms, zl[0]?.lanes || 1);
+  zl.forEach(({ it, lane, lanes }) => tracks.zooms.appendChild(spanItem('zoom', it, `Zoom ${it.scale.toFixed(1)}×`, lane, lanes)));
+  const auItems = D().music.map(mu => { const m = S.media[mu.media_id] || {}; const len = (mu.out ?? m.duration ?? 0) - (mu.in || 0); return { id: mu.id, start: mu.start, end: mu.start + len, mu, m }; });
+  const aul = laneItems(auItems);
+  setTrackLanes(tracks.music, aul[0]?.lanes || 1);
+  for (const { it, lane, lanes } of aul) {
+    const { mu, m } = it;
     const voice = mu.role === 'voice';
-    const d = spanItem('music', it, (voice ? '🎙 ' : '♪ ') + (m.filename || 'audio') + ` · ${Math.round((mu.volume ?? 1) * 100)}%`, 0, 1);
+    const d = spanItem('music', it, (voice ? '🎙 ' : '♪ ') + (m.filename || 'audio') + ` · ${Math.round((mu.volume ?? 1) * 100)}%`, lane, lanes);
     if (voice) d.classList.add('voice');
     if (m.has_waveform && m.duration) { d.style.backgroundImage = `url(/api/media/${m.id}/waveform)`; d.style.backgroundSize = `${m.duration * S.pxs}px 70%`; d.style.backgroundPosition = `${-(mu.in || 0) * S.pxs}px 100%`; }
     tracks.music.appendChild(d);
@@ -744,6 +792,12 @@ function renderTimeline() {
   for (const c of S.comments) tracks.marks.appendChild(markEl('comment', c.id, c.t, `${c.author || c.username}: ${c.text}`, c.resolved));
   $('#playhead').style.left = tlX(S.t) + 'px';
 }
+function layerLabel(ov) {
+  if (ov.type === 'media') { const m = S.media[ov.params?.media_id] || {}; return (m.kind === 'image' ? '🖼 ' : '🎬 ') + (m.filename || 'medio'); }
+  return LAYER_TYPES[ov.type]?.label || 'Capa';
+}
+/* Altura de una pista según cuántos carriles necesita (elementos superpuestos) */
+function setTrackLanes(track, lanes) { track.style.height = (8 + Math.max(1, lanes) * 26) + 'px'; }
 function isSel(kind, id) { return S.sel && S.sel.kind === kind && S.sel.id === id; }
 function laneItems(items) {
   const sorted = [...items].sort((a, b) => a.start - b.start), ends = [], res = [];
@@ -757,8 +811,7 @@ function laneItems(items) {
 }
 function spanItem(kind, it, label, lane, lanes) {
   const d = el('div', { class: `tl-item ${kind}` + (isSel(kind, it.id) ? ' sel' : ''), title: label }, label, el('div', { class: 'h l' }), el('div', { class: 'h r' }));
-  const h = 28 / lanes;
-  Object.assign(d.style, { left: it.start * S.pxs + 'px', width: Math.max(6, (it.end - it.start) * S.pxs) + 'px', top: (3 + lane * h) + 'px', bottom: 'auto', height: (h - 1) + 'px' });
+  Object.assign(d.style, { left: it.start * S.pxs + 'px', width: Math.max(6, (it.end - it.start) * S.pxs) + 'px', top: (4 + lane * 26) + 'px', bottom: 'auto', height: '24px' });
   d.addEventListener('pointerdown', e => dragSpan(e, kind, it.id));
   return d;
 }
@@ -843,11 +896,21 @@ function dragSpan(e, kind, id) {
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     return;
   }
-  const s0 = it.start, e0 = it.end;
+  const s0 = it.start, e0 = it.end, in0 = it.in || 0;
+  const mvid = it.type === 'media' ? S.media[it.params?.media_id] : null;
+  const isVid = mvid && mvid.kind === 'video';
   const mv = ev => {
     const dt = (ev.clientX - x0) / S.pxs; if (Math.abs(ev.clientX - x0) > 3) moved = true; if (!moved) return;
-    if (handle === 'l') it.start = clamp(snapT(s0 + dt), 0, it.end - 0.2);
-    else if (handle === 'r') it.end = Math.max(it.start + 0.2, snapT(e0 + dt));
+    if (handle === 'l') {
+      // en un video superpuesto, recortar el inicio avanza también el punto de entrada
+      const minStart = isVid ? Math.max(0, s0 - in0) : 0;
+      it.start = clamp(snapT(s0 + dt), minStart, it.end - 0.2);
+      if (isVid) it.in = in0 + (it.start - s0);
+    }
+    else if (handle === 'r') {
+      it.end = Math.max(it.start + 0.2, snapT(e0 + dt));
+      if (isVid) it.end = Math.min(it.end, it.start + mvid.duration - (it.in || 0));
+    }
     else { const ns = Math.max(0, snapT(s0 + dt)); it.start = ns; it.end = ns + (e0 - s0); }
     renderTimeline(); updateStage();
   };
@@ -930,14 +993,35 @@ function renderInspector() {
     }
     sec.append(el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: () => splitAt(S.t) }, '✂ Dividir en cabezal'), el('button', { class: 'btn sm danger', onclick: deleteSelected }, 'Eliminar')));
   } else if (k === 'overlay') {
-    const def = LAYER_TYPES[it.type];
-    const p = it.params;
+    const def = LAYER_TYPES[it.type] || { label: 'Medio superpuesto' };
+    const p = it.params || {};
     const setP = (key, re) => (v, fin = true) => {
       liveEdit(() => { it.params[key] = v; }, fin);
       rasterizeSoon(it);
       if (re) renderInspector();
     };
-    sec.append(el('h4', {}, 'Capa · ' + def.label));
+    sec.append(el('h4', {}, 'Capa · ' + (it.type === 'media' ? layerLabel(it) : def.label)));
+    if (it.type === 'media') {
+      const mm = S.media[p.media_id] || {};
+      const setO = (fn, re = true) => upd(d => fn(d.overlays.find(x => x.id === it.id)), re);
+      const ar = mm.width && mm.height ? mm.height / mm.width : 9 / 16, r = W0() / H0();
+      const place = (x, y, w) => setO(o => { o.x = x; o.y = y; o.w = w; });
+      sec.append(el('div', { class: 'hint' }, mm.kind === 'video' ? 'Video encima de la secuencia principal (imagen en imagen, B-roll o pantalla dividida).' : 'Imagen encima de la secuencia principal.'),
+        el('div', { class: 'row wrap', style: { gap: '4px' } },
+          el('button', { class: 'btn sm', onclick: () => place(1 - 0.32 - 0.03, 0.04, 0.32) }, 'Esquina ↗'),
+          el('button', { class: 'btn sm', onclick: () => place(1 - 0.32 - 0.03, 1 - 0.32 * ar * r - 0.05, 0.32) }, 'Esquina ↘'),
+          el('button', { class: 'btn sm', onclick: () => place(0.03, 1 - 0.32 * ar * r - 0.05, 0.32) }, 'Esquina ↙'),
+          el('button', { class: 'btn sm', onclick: () => place(0, Math.max(0, (1 - ar * r) / 2), 1) }, 'Pantalla completa'),
+          el('button', { class: 'btn sm', onclick: () => place(0, Math.max(0, (1 - 0.5 * ar * r) / 2), 0.5) }, 'Mitad izquierda'),
+          el('button', { class: 'btn sm', onclick: () => place(0.5, Math.max(0, (1 - 0.5 * ar * r) / 2), 0.5) }, 'Mitad derecha')));
+      if (mm.kind === 'video') {
+        sec.append(field('Desde (s del video)', num(it.in || 0, 0.1, v => setO(o => { o.in = clamp(v, 0, Math.max(0, mm.duration - 0.2)); o.end = Math.min(o.end, o.start + mm.duration - o.in); }), { min: 0 })));
+        if (mm.has_audio) {
+          sec.append(chk('Silenciar el sonido de este video', it.mute, v => setO(o => { o.mute = v; })),
+            el('label', { class: 'f' }, el('span', {}, 'Volumen'), range(0, 1, 0.01, it.volume ?? 1, (v, fin) => liveEdit(() => { it.volume = v; }, fin), v => Math.round(v * 100) + '%')[0]));
+        }
+      }
+    }
     switch (it.type) {
       case 'text':
         sec.append(field('Texto', txt(p.text, setP('text'), true)),
@@ -994,6 +1078,10 @@ function renderInspector() {
         el('button', { class: 'btn sm', onclick: () => upd(d => { const o = d.overlays.find(x => x.id === it.id); o.y = 1 - (o.h || 0.1) - 0.06; }, true) }, 'Abajo')),
       el('label', { class: 'f' }, el('span', {}, 'Opacidad'), range(0.1, 1, 0.05, it.opacity ?? 1, (v, fin) => { liveEdit(() => { it.opacity = v; }, fin); S.layerEls[it.id].style.opacity = v; })[0]),
       field('Fundido de entrada/salida (s)', num(it.fade ?? 0.25, 0.05, v => upd(d => { d.overlays.find(x => x.id === it.id).fade = clamp(v, 0, 2); }), { min: 0, max: 2 })),
+      el('div', { class: 'row wrap', style: { gap: '4px' } },
+        el('button', { class: 'btn sm', title: 'Poner encima de las demás capas', onclick: () => upd(d => { const i = d.overlays.findIndex(x => x.id === it.id); d.overlays.push(d.overlays.splice(i, 1)[0]); }, true) }, '⬆ Al frente'),
+        el('button', { class: 'btn sm', title: 'Poner debajo de las demás capas', onclick: () => upd(d => { const i = d.overlays.findIndex(x => x.id === it.id); d.overlays.unshift(d.overlays.splice(i, 1)[0]); }, true) }, '⬇ Al fondo'),
+        el('button', { class: 'btn sm', onclick: () => splitAt(S.t) }, '✂ Dividir')),
       el('div', { class: 'row' },
         el('button', { class: 'btn sm', onclick: () => { const copy = JSON.parse(JSON.stringify(it)); copy.id = uid(); copy.start = S.t; copy.end = S.t + (it.end - it.start); change(d => d.overlays.push(copy)); select('overlay', copy.id); } }, 'Duplicar en cabezal'),
         el('button', { class: 'btn sm danger', onclick: deleteSelected }, 'Eliminar')));
@@ -1084,7 +1172,10 @@ function renderMedia() {
       if (m.kind === 'audio') {
         actions.append(el('button', { class: 'btn sm icon', title: 'Añadir como narración (voz) en el cabezal', onclick: () => addMediaToTimeline(m, 'playhead', 'voice') }, '🎙'));
         actions.append(el('button', { class: 'btn sm icon', title: 'Añadir como música de fondo en el cabezal', onclick: () => addMediaToTimeline(m, 'playhead', 'music') }, '♪'));
-      } else actions.append(el('button', { class: 'btn sm icon', title: 'Añadir en el cabezal', onclick: () => addMediaToTimeline(m) }, '+'));
+      } else {
+        actions.append(el('button', { class: 'btn sm icon', title: 'Añadir a la secuencia principal en el cabezal', onclick: () => addMediaToTimeline(m) }, '+'));
+        actions.append(el('button', { class: 'btn sm icon', title: 'Superponer encima del video en el cabezal (imagen en imagen)', onclick: () => overlayMedia(m) }, '⧉'));
+      }
       if (m.has_audio && m.kind !== 'image') actions.append(el('button', { class: 'btn sm icon', title: tx ? 'Volver a transcribir / traducir' : 'Transcribir', onclick: () => transcribeDialog(m) }, 'Tx'));
     }
     if (canEdit()) actions.append(el('button', { class: 'btn sm icon ghost', title: 'Eliminar medio', onclick: async () => {
