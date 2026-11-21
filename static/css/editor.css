@@ -168,3 +168,6 @@ dialog.floating { position: fixed; inset: 64px 16px auto auto; margin: 0; width:
 dialog.floating .dlg-h { padding-bottom: 0; }
 .tl-sil { position: absolute; top: 0; bottom: 0; background: rgba(214, 54, 54, .45);
   border-left: 1px solid #ff6b6b; border-right: 1px solid #ff6b6b; pointer-events: none; z-index: 2; }
+
+/* Videos con transparencia (sin fondo): tablero de ajedrez detrás de la miniatura */
+.mitem .thumb.alpha { background: repeating-conic-gradient(#555 0 25%, #333 0 50%) 0 0/10px 10px; }

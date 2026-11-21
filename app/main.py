@@ -38,9 +38,24 @@ async def security_headers(request: Request, call_next):
     return resp
 
 
+def _asset_version() -> str:
+    """Huella de los JS/CSS: cambia en cada despliegue que los modifique."""
+    import hashlib
+    h = hashlib.sha1()
+    for f in sorted(STATIC.rglob("*")):
+        if f.suffix in (".js", ".css") and "vendor" not in f.parts:
+            h.update(f.read_bytes())
+    return h.hexdigest()[:10]
+
+
+ASSET_V = _asset_version()
+_ASSET_RE = re.compile(r'((?:src|href)="/static/[^"?]+\.(?:js|css))"')
+
+
 def _page(name: str) -> HTMLResponse:
-    return HTMLResponse((STATIC / name).read_text(encoding="utf-8"),
-                        headers={"Cache-Control": "no-cache"})
+    # «?v=» obliga al navegador a descargar los JS/CSS nuevos tras cada actualización
+    html = _ASSET_RE.sub(rf'\1?v={ASSET_V}"', (STATIC / name).read_text(encoding="utf-8"))
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/", include_in_schema=False)
@@ -219,6 +234,7 @@ def _media_out(r) -> dict:
     d["has_waveform"] = bool(r["waveform_path"])
     d["audio_silent"] = bool(r["audio_silent"]) if "audio_silent" in r.keys() else False
     d["audio_tracks"] = len(db.audio_map_of(r))
+    d["has_alpha"] = bool(r["has_alpha"]) if "has_alpha" in r.keys() else False
     return d
 
 
@@ -474,7 +490,8 @@ def media_proxy(mid: str, user=Depends(current_user)):
     if not m["proxy_path"] or not Path(m["proxy_path"]).exists():
         raise HTTPException(404, "Vista previa aún no disponible")
     ext = Path(m["proxy_path"]).suffix.lower()
-    mime = {".mp4": "video/mp4", ".m4a": "audio/mp4", ".png": "image/png"}.get(ext)
+    mime = {".mp4": "video/mp4", ".webm": "video/webm", ".m4a": "audio/mp4",
+            ".png": "image/png"}.get(ext)
     return FileResponse(m["proxy_path"], media_type=mime,
                         headers={"Cache-Control": "private, max-age=86400"})
 
@@ -507,6 +524,37 @@ def media_silences(mid: str, body: SilencesIn, user=Depends(current_user)):
     except FFmpegError as e:
         raise HTTPException(500, f"No se pudo analizar el audio: {e}")
     return {"silences": sil, "has_audio": True}
+
+
+class RemoveBgIn(BaseModel):
+    mode: str = Field("transparent", pattern="^(transparent|color|blur|image)$")
+    color: str = Field("#ffffff", pattern="^#[0-9a-fA-F]{6}$")
+    image_media_id: str | None = None
+    blur: int = Field(25, ge=5, le=60)
+    max_height: int = Field(720, ge=360, le=1080)
+    quality: str = Field("normal", pattern="^(normal|rapida)$")
+
+
+@app.post("/api/media/{mid}/remove-bg")
+def media_remove_bg(mid: str, body: RemoveBgIn, user=Depends(current_user)):
+    """Crea un medio nuevo con el fondo quitado (el original no se modifica)."""
+    m = _media_for(mid, user, write=True)
+    if m["kind"] != "video" or m["status"] != "ready":
+        raise HTTPException(400, "Solo se puede quitar el fondo de un video ya procesado")
+    if body.mode == "image":
+        img = db.q1("SELECT * FROM media WHERE id=? AND project_id=? AND kind='image' AND status='ready'",
+                    body.image_media_id or "", m["project_id"])
+        if not img:
+            raise HTTPException(400, "Elija una imagen de la biblioteca del proyecto como fondo")
+    stem = Path(m["filename"]).stem[:100]
+    label = {"transparent": "sin fondo", "color": "fondo de color", "blur": "fondo desenfocado",
+             "image": "fondo de imagen"}[body.mode]
+    ext = ".webm" if body.mode == "transparent" else ".mp4"
+    nid = db.new_id()
+    db.ex("INSERT INTO media(id, project_id, filename, path, kind, created_at) VALUES (?,?,?,?,?,?)",
+          nid, m["project_id"], f"{stem} ({label}){ext}", "", "video", db.now())
+    jid = db.enqueue("bgremove", m["project_id"], nid, {**body.model_dump(), "source_id": mid})
+    return {"id": nid, "job_id": jid}
 
 
 class TranscribeIn(BaseModel):
@@ -606,7 +654,8 @@ def list_jobs(pid: str, user=Depends(current_user)):
                 "WHERE j.project_id=? ORDER BY j.created_at DESC LIMIT 40", pid)
     jobs = [_job_out(r) for r in rows]
     # Posición en la cola de cada trabajo pendiente (la cola es común a todos los proyectos)
-    lane = {"ingest": ("ingest",), "transcribe": ("transcribe", "render"), "render": ("transcribe", "render")}
+    heavy = ("transcribe", "render", "bgremove")
+    lane = {"ingest": ("ingest",), "transcribe": heavy, "render": heavy, "bgremove": heavy}
     for j in jobs:
         if j["status"] == "queued":
             types = lane.get(j["type"], (j["type"],))
@@ -620,7 +669,7 @@ def list_jobs(pid: str, user=Depends(current_user)):
     running_types = {r["type"] for r in db.q("SELECT type FROM jobs WHERE status='running'")}
     worker = {"rapido": t - beats.get("worker:rapido", 0) < 60 or "ingest" in running_types,
               "pesado": t - beats.get("worker:pesado", 0) < 60
-              or bool(running_types & {"transcribe", "render"})}
+              or bool(running_types & {"transcribe", "render", "bgremove"})}
     return {"jobs": jobs, "running": busy, "worker": worker}
 
 
@@ -632,6 +681,8 @@ def cancel_job(jid: str, user=Depends(current_user)):
     check_project(j["project_id"], user, write=True)
     db.ex("UPDATE jobs SET status='error', message='Cancelado por el usuario', finished_at=? "
           "WHERE id=? AND status='queued'", db.now(), jid)
+    if j["type"] == "bgremove" and j["media_id"] and j["status"] == "queued":
+        db.ex("UPDATE media SET status='error' WHERE id=? AND status='processing'", j["media_id"])
     return {"ok": True}
 
 

@@ -1150,7 +1150,7 @@ function renderMedia() {
     const job = S.jobs.find(j => j.media_id === m.id && (j.status === 'running' || j.status === 'queued'));
     const thumb = el('div', { class: 'thumb' });
     if (m.status === 'ready') {
-      if (m.kind === 'video') thumb.append(el('video', { src: proxyUrl(m.id) + '#t=1', preload: 'metadata', muted: true }));
+      if (m.kind === 'video') { thumb.append(el('video', { src: proxyUrl(m.id) + '#t=1', preload: 'metadata', muted: true })); if (m.has_alpha) thumb.classList.add('alpha'); }
       else if (m.kind === 'image') thumb.style.backgroundImage = `url(${proxyUrl(m.id)})`;
       else thumb.textContent = '♪ audio';
     } else thumb.textContent = m.status === 'error' ? '⚠' : '…';
@@ -1158,6 +1158,7 @@ function renderMedia() {
     let status;
     if (m.status === 'processing') status = el('span', { class: 'badge warn' }, job && job.status === 'running' ? `Procesando ${Math.round(job.progress * 100)}%` : job && job.position ? `En cola (n.º ${job.position})` : 'En cola');
     else if (m.status === 'error') status = el('span', { class: 'badge err' }, 'Error');
+    if (m.status === 'processing' && job && job.type === 'bgremove') status = el('span', { class: 'badge warn', title: job.message || '' }, job.status === 'running' ? `Quitando fondo ${Math.round(job.progress * 100)}%` : job.position ? `En cola (n.º ${job.position})` : 'En cola');
     else if (job && job.type === 'transcribe') status = el('span', { class: 'badge warn' }, job.status === 'running' ? `Transcribiendo ${Math.round(job.progress * 100)}%` : 'Transcripción en cola');
     else if (tx) status = el('span', { class: 'badge ok', title: 'Idioma: ' + tx.language }, 'Transcrito' + (tx.translated ? ' + EN' : ''));
     else status = null;
@@ -1166,6 +1167,8 @@ function renderMedia() {
       audioBadge = el('span', { class: 'badge err', title: 'El archivo no contiene ninguna pista de audio' }, 'Sin audio');
     else if (m.status === 'ready' && m.audio_silent)
       audioBadge = el('span', { class: 'badge err', title: 'Las pistas de audio están en silencio: revise el micrófono con que se grabó' }, 'Audio en silencio');
+    else if (m.status === 'ready' && m.has_alpha)
+      audioBadge = el('span', { class: 'badge ok', title: 'Video sin fondo: añádalo con ⧉ para que se vea transparente encima de otro' }, 'Transparente');
     else if (m.status === 'ready' && m.audio_tracks > 1)
       audioBadge = el('span', { class: 'badge', title: 'Se combinaron las pistas de audio que tienen sonido' }, `${m.audio_tracks} pistas`);
     const dur = m.kind === 'image' ? 'Imagen' : fmtTime(m.duration);
@@ -1177,6 +1180,7 @@ function renderMedia() {
       } else {
         actions.append(el('button', { class: 'btn sm icon', title: 'Añadir a la secuencia principal en el cabezal', onclick: () => addMediaToTimeline(m) }, '+'));
         actions.append(el('button', { class: 'btn sm icon', title: 'Superponer encima del video en el cabezal (imagen en imagen)', onclick: () => overlayMedia(m) }, '⧉'));
+        if (m.kind === 'video' && !m.has_alpha) actions.append(el('button', { class: 'btn sm icon', title: 'Quitar el fondo (crea un video nuevo con la persona recortada)', onclick: () => removeBgDialog(m) }, '👤'));
       }
       if (m.has_audio && m.kind !== 'image') actions.append(el('button', { class: 'btn sm icon', title: tx ? 'Volver a transcribir / traducir' : 'Transcribir', onclick: () => transcribeDialog(m) }, 'Tx'));
     }
@@ -1342,6 +1346,41 @@ $('#btnSilences').onclick = () => {
   toast(`${ranges.length} silencios eliminados (${total.toFixed(1)} s). Ctrl+Z para deshacer.`);
   seek(Math.min(S.t, duration()));
 };
+/* ================================================================= Quitar el fondo de un video */
+function removeBgDialog(m) {
+  const dlg = $('#dlgBg'), f = $('#bgForm');
+  const imgs = Object.values(S.media).filter(x => x.kind === 'image' && x.status === 'ready');
+  const sel = f.image_media_id; sel.innerHTML = '';
+  if (!imgs.length) sel.append(el('option', { value: '' }, 'Primero suba una imagen en «Medios»'));
+  imgs.forEach(x => sel.append(el('option', { value: x.id }, x.filename)));
+  f.max_height.querySelector('[value="1080"]').disabled = (m.height || 0) < 1000;
+  if (f.max_height.value === '1080' && (m.height || 0) < 1000) f.max_height.value = '720';
+  const sync = () => {
+    $$('#dlgBg .bg-opt').forEach(n => n.classList.toggle('hidden', n.dataset.for !== f.mode.value));
+    $('#bgBlurV').textContent = f.blur.value;
+    // Referencia medida: ≈8 cuadros/s (rápida) y ≈4,5 cuadros/s (normal) a 720p con 2 vCPU
+    const fpsProc = f.quality.value === 'rapida' ? 8 : 4.5, frames = (m.duration || 0) * Math.min(m.fps || 30, 60);
+    const min = Math.max(1, Math.round(frames / fpsProc / 60));
+    $('#bgEstimate').textContent = `«${m.filename}» · ${fmtTime(m.duration)}. Tiempo estimado en un servidor de 2 núcleos: unos ${min} min (menos con más núcleos). Puede seguir editando mientras tanto.`;
+  };
+  f.onchange = f.oninput = sync; sync();
+  f.onsubmit = async e => {
+    if (e.submitter?.value !== 'ok') return;
+    e.preventDefault();
+    const body = { mode: f.mode.value, color: f.color.value, blur: +f.blur.value, max_height: +f.max_height.value, quality: f.quality.value };
+    if (body.mode === 'image') { if (!sel.value) { toast('Suba primero una imagen a la biblioteca', true); return; } body.image_media_id = sel.value; }
+    try {
+      const r = await API.post(`/api/media/${m.id}/remove-bg`, body);
+      dlg.close();
+      toast('Quitando el fondo en el servidor. El video nuevo aparecerá en la biblioteca.');
+      const list = await API.get(`/api/projects/${PID}/media`);
+      list.forEach(x => { if (!S.media[x.id]) S.media[x.id] = x; });
+      renderMedia(); pollJobs();
+      return r;
+    } catch (err) { toast(err.message, true); }
+  };
+  dlg.showModal();
+}
 /* ================================================================= Eliminar silencios (por audio, sin transcripción) */
 const SIL = { cache: {}, ranges: [], token: 0 };
 function silParams() {
@@ -1663,9 +1702,10 @@ async function pollJobs() {
   for (const j of S.jobs) {
     if ((j.status === 'done' || j.status === 'error') && prevActive.includes(j.id) && !S.knownDone.has(j.id)) {
       S.knownDone.add(j.id);
-      if (j.status === 'error') toast(`${({ ingest: 'Procesamiento', transcribe: 'Transcripción', render: 'Render' })[j.type]} falló: ${j.message}`, true, 8000);
+      if (j.status === 'error') toast(`${({ ingest: 'Procesamiento', transcribe: 'Transcripción', render: 'Render', bgremove: 'Quitar el fondo' })[j.type]} falló: ${j.message}`, true, 8000);
       else if (j.type === 'ingest') mediaChanged = true;
       else if (j.type === 'transcribe') { await loadTranscript(j.media_id); computeWords(); renderTranscript(); renderMedia(); updateStage(); toast('Transcripción lista: ' + (j.filename || '')); }
+      else if (j.type === 'bgremove') { mediaChanged = true; toast('Fondo quitado: el video nuevo ya está en la biblioteca.', false, 6000); }
       else if (j.type === 'render') { loadExports(); toast('¡Video exportado! Véalo en «Exportados».', false, 6000); }
     }
   }
@@ -1689,7 +1729,7 @@ function renderJobs() {
   box.querySelectorAll('.job.srv').forEach(n => n.remove());
   if (!act.length && !box.querySelector('.job')) { box.classList.add('hidden'); return; }
   showJobsBox();
-  const names = { ingest: 'Procesando', transcribe: 'Transcribiendo', render: 'Exportando' };
+  const names = { ingest: 'Procesando', transcribe: 'Transcribiendo', render: 'Exportando', bgremove: 'Quitando fondo' };
   const queued = t => act.some(j => j.status === 'queued' && t.includes(j.type));
   const warn = txt => box.append(el('div', { class: 'job srv', style: { color: 'var(--amber)' } }, txt));
   if (queued(['ingest']) && S.worker.rapido === false)

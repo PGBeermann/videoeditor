@@ -11,6 +11,7 @@ y exporta MP4, subtítulos y paquetes SCORM para Moodle. Se despliega con Docker
 | Grabación | Pantalla + cámara (PiP circular o rectangular), solo pantalla, solo cámara, pizarra blanca + cámara; anotaciones a mano alzada que quedan grabadas; teleprompter con velocidad, tamaño y modo espejo; cuenta regresiva; pausa; medidor de nivel; mezcla de micrófono y audio del sistema |
 | Edición | Línea de tiempo con pistas de video, capas, zoom, música y marcas; recortar, dividir, reordenar; deshacer/rehacer; atajos de teclado; autoguardado con control de versiones |
 | Eliminar silencios | Botón «🔇 Eliminar silencios» en la barra de reproducción: detecta las pausas directamente del audio con el filtro `silencedetect` de FFmpeg (no requiere transcripción), con sensibilidad de −30 a −45 dBFS, pausa mínima y margen ajustables; marca las pausas en rojo en la línea de tiempo para revisarlas antes de cortar, respeta los clips silenciados, las narraciones y los videos superpuestos con sonido, y se deshace con Ctrl+Z |
+| Quitar el fondo | Botón «👤» en la biblioteca: recorta a la persona con el modelo Robust Video Matting (Lin et al., WACV 2022), que mantiene coherencia entre cuadros y evita el parpadeo del borde. Crea un video nuevo (el original no cambia) con fondo transparente (WebM VP9 con alfa, para superponerlo con ⧉ sobre diapositivas o pantalla), de color sólido, desenfocado o con una imagen de la biblioteca; conserva el audio y reutiliza la transcripción |
 | Edición por texto | Transcripción automática con marcas de tiempo por palabra (faster-whisper); borrar palabras recorta el video; detección de muletillas; recorte automático de silencios; corrección de palabras para los subtítulos |
 | Contenido científico | Ecuaciones LaTeX (MathJax 3), fórmulas y reacciones químicas con mhchem (`\ce{...}`), estructuras moleculares desde SMILES (RDKit.js), flechas, recuadros, rótulos, imágenes, portada institucional |
 | Zoom | Acercamiento animado a un área con transición suave |
@@ -62,6 +63,12 @@ La primera transcripción descarga el modelo Whisper elegido (unos 480 MB para `
 * **Transcripción:** como referencia, el benchmark del propio faster-whisper reporta 1 min 42 s para 13 min de audio con el modelo `small` en int8, usando 8 hilos de un Intel i7-12700K. En un VPS de 4 vCPU espere varias veces ese tiempo.
 * **RAM:** 4 GB como mínimo; 8 GB si usa `WHISPER_MODEL=medium`.
 * **Disco:** cada proyecto guarda los originales, el proxy y las exportaciones. Prevea unos 3 GB por hora de clase grabada.
+
+### Quitar el fondo: modelo y rendimiento
+
+La primera vez que se usa se descarga el modelo `rvm_mobilenetv3_fp32.onnx` (15 MB) desde las *releases* de [RobustVideoMatting](https://github.com/PeterL1n/RobustVideoMatting) a `/data/models/rvm`, y se verifica su SHA-256. Corre en CPU con onnxruntime (ya incluido como dependencia de faster-whisper). Como referencia, en 2 vCPU procesa unos 4–5 cuadros/s a 720p con precisión «Normal» y unos 8 cuadros/s con «Rápida»: un video de 5 min a 30 fps tarda de 20 a 35 min. Con más núcleos es proporcionalmente más rápido; `MATTING_THREADS` limita los hilos si hace falta. El modelo se distribuye con licencia GPL-3.0.
+
+La vista previa transparente se ve en Chrome y Edge; el MP4 exportado la compone siempre correctamente.
 
 ### Respaldo
 

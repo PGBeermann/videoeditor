@@ -13,7 +13,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import config, db, media, transcribe
+from . import config, db, matting, media, transcribe
 from .render import Renderer, cleanup
 
 _stop = False
@@ -102,6 +102,48 @@ def do_transcribe(job, prog: Progress) -> dict:
     return {"words": len(res["words"]), "language": res["language"]}
 
 
+def do_bgremove(job, prog: Progress) -> dict:
+    """Quita el fondo de un video y lo registra como medio nuevo (ya listo para usar)."""
+    params = db.jload(job["params"], {})
+    m = db.q1("SELECT * FROM media WHERE id=?", job["media_id"])
+    src = db.q1("SELECT * FROM media WHERE id=?", params.get("source_id"))
+    if not m:
+        raise RuntimeError("El medio de destino ya no existe")
+    if not src:
+        raise RuntimeError("El video original ya no existe")
+    info = {"kind": src["kind"], "width": src["width"], "height": src["height"], "fps": src["fps"],
+            "duration": src["duration"], "has_audio": bool(src["has_audio"]),
+            "audio_map": db.audio_map_of(src)}
+    image = None
+    if params.get("mode") == "image":
+        img = db.q1("SELECT path FROM media WHERE id=?", params.get("image_media_id"))
+        if not img:
+            raise RuntimeError("La imagen de fondo ya no existe")
+        image = img["path"]
+    out = matting.remove_background(
+        src["path"], info, config.MEDIA_DIR / m["id"], mode=params.get("mode", "transparent"),
+        color=params.get("color", "#ffffff"), image=image, blur=int(params.get("blur", 25)),
+        max_height=int(params.get("max_height", 720)), quality=params.get("quality", "normal"),
+        on_progress=lambda f, msg="": prog(f * 0.95, msg))
+    prog(0.96, "Analizando el resultado")
+    pi = media.probe(out)
+    alpha = params.get("mode") == "transparent"
+    wave = media.make_waveform(m["id"], str(out)) if pi["has_audio"] else None
+    # El resultado ya es liviano (≤1080p, GOP de 1 s): sirve también de vista previa.
+    # El WebM con alfa se reproduce transparente en Chrome y Edge.
+    db.ex("UPDATE media SET path=?, proxy_path=?, waveform_path=?, kind='video', duration=?, width=?, "
+          "height=?, fps=?, has_audio=?, audio_map=?, audio_silent=?, has_alpha=?, status='ready' "
+          "WHERE id=?", str(out), str(out), wave, pi["duration"], pi["width"], pi["height"], pi["fps"],
+          int(pi["has_audio"]), db.jdump([0] if pi["has_audio"] else []), src["audio_silent"],
+          int(alpha), m["id"])
+    # Misma pista de audio y mismos tiempos: se reutiliza la transcripción del original
+    tr = db.q1("SELECT * FROM transcripts WHERE media_id=?", src["id"])
+    if tr:
+        db.ex("INSERT OR REPLACE INTO transcripts(media_id, language, words, translated, created_at) "
+              "VALUES (?,?,?,?,?)", m["id"], tr["language"], tr["words"], tr["translated"], db.now())
+    return {"media": m["id"], "file": out.name, "alpha": alpha}
+
+
 def do_render(job, prog: Progress) -> dict:
     params = db.jload(job["params"], {})
     p = db.q1("SELECT * FROM projects WHERE id=?", job["project_id"])
@@ -142,11 +184,12 @@ def do_render(job, prog: Progress) -> dict:
     return {"export_id": export_id, **{k: res[k] for k in ("duration", "width", "height")}}
 
 
-HANDLERS = {"ingest": do_ingest, "transcribe": do_transcribe, "render": do_render}
+HANDLERS = {"ingest": do_ingest, "transcribe": do_transcribe, "render": do_render,
+            "bgremove": do_bgremove}
 
 # Dos carriles independientes: la ingesta (rápida) nunca espera detrás de una
 # transcripción o un render largos.
-LANES = {"rapido": ("ingest",), "pesado": ("transcribe", "render")}
+LANES = {"rapido": ("ingest",), "pesado": ("transcribe", "render", "bgremove")}
 
 
 def run_job(job) -> None:
@@ -161,7 +204,7 @@ def run_job(job) -> None:
         msg = str(e).strip().splitlines()[-1][:500] if str(e).strip() else type(e).__name__
         db.ex("UPDATE jobs SET status='error', message=?, finished_at=? WHERE id=?",
               msg, db.now(), job["id"])
-        if job["type"] == "ingest" and job["media_id"]:
+        if job["type"] in ("ingest", "bgremove") and job["media_id"]:
             db.ex("UPDATE media SET status='error' WHERE id=?", job["media_id"])
 
 
@@ -188,7 +231,7 @@ def main() -> None:
     db.ex("UPDATE jobs SET status='error', message='Interrumpido por reinicio del servidor', "
           "finished_at=? WHERE status='running'", db.now())
     db.ex("UPDATE media SET status='error' WHERE status='processing' AND id NOT IN "
-          "(SELECT media_id FROM jobs WHERE type='ingest' AND status='queued' AND media_id IS NOT NULL)")
+          "(SELECT media_id FROM jobs WHERE type IN ('ingest','bgremove') AND status='queued' AND media_id IS NOT NULL)")
     # Medios subidos antes del análisis de pistas: se reprocesan una vez para elegir
     # la pista de audio con sonido (p. ej., grabaciones con la primera pista vacía)
     for r in db.q("SELECT id, project_id FROM media WHERE status='ready' AND has_audio=1 "

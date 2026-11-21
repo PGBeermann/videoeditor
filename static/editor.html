@@ -264,6 +264,31 @@
   <div class="dlg-f"><button class="btn" id="silAnalyze">Analizar</button><button class="btn primary" id="silApply" disabled>Eliminar silencios</button></div>
 </dialog>
 
+<dialog id="dlgBg">
+  <form method="dialog" id="bgForm">
+    <div class="dlg-h"><h3>Quitar el fondo del video</h3></div>
+    <div class="dlg-b">
+      <p class="muted small" style="margin:0">Recorta a la persona con inteligencia artificial (modelo Robust Video Matting) y crea un <b>video nuevo</b> en la biblioteca; el original no cambia. Funciona mejor con una persona de frente a la cámara, buena iluminación y un fondo que no se mueva.</p>
+      <label class="f"><span>Fondo nuevo</span>
+        <select name="mode">
+          <option value="transparent">Transparente: para superponer (⧉) sobre diapositivas o pantalla</option>
+          <option value="color">Color sólido</option>
+          <option value="blur">Desenfocar el fondo original</option>
+          <option value="image">Imagen de la biblioteca</option>
+        </select></label>
+      <label class="f bg-opt" data-for="color"><span>Color</span><input type="color" name="color" value="#ffffff"></label>
+      <label class="f bg-opt" data-for="blur"><span>Intensidad del desenfoque: <b id="bgBlurV">25</b></span><input type="range" name="blur" min="5" max="60" value="25"></label>
+      <label class="f bg-opt" data-for="image"><span>Imagen</span><select name="image_media_id"></select></label>
+      <div class="grid2">
+        <label class="f"><span>Resolución</span><select name="max_height"><option value="720">720p (recomendado)</option><option value="1080">1080p (si el original lo tiene)</option><option value="480">480p (más liviano)</option></select></label>
+        <label class="f"><span>Precisión del borde</span><select name="quality"><option value="normal">Normal</option><option value="rapida">Rápida (≈2× más veloz)</option></select></label>
+      </div>
+      <p class="muted small" style="margin:0" id="bgEstimate"></p>
+    </div>
+    <div class="dlg-f"><button class="btn" value="cancel" formnovalidate>Cancelar</button><button class="btn primary" value="ok">Quitar fondo</button></div>
+  </form>
+</dialog>
+
 <dialog id="dlgHelp">
   <div class="dlg-h"><h3>Atajos de teclado</h3></div>
   <div class="dlg-b small">

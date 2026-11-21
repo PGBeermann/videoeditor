@@ -228,7 +228,9 @@ class Renderer:
                     mi = max(0.0, float(ov.get("in", 0)))
                     length = min(e - s, max(0.05, mm["duration"] - mi))
                     e = s + length
-                    args += ["-ss", _f(mi), "-t", _f(length), "-i", mm["path"]]
+                    # Un WebM con alfa solo conserva la transparencia con el decodificador libvpx
+                    dec = ["-c:v", "libvpx-vp9"] if mm.get("has_alpha") else []
+                    args += ["-ss", _f(mi), "-t", _f(length), *dec, "-i", mm["path"]]
                     # el video superpuesto empieza en «s» de la línea de tiempo
                     chain = (f"[{n}:v]fps={_f(fps)},setpts=PTS-STARTPTS+{_f(s)}/TB,"
                              f"scale={pw}:-2:flags=lanczos,format=rgba")

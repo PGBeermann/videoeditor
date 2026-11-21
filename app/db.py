@@ -146,6 +146,7 @@ def connect() -> sqlite3.Connection:
 MIGRATIONS = [
     ("media", "audio_map", "TEXT"),                         # pistas de audio a usar, JSON
     ("media", "audio_silent", "INTEGER NOT NULL DEFAULT 0"),
+    ("media", "has_alpha", "INTEGER NOT NULL DEFAULT 0"),   # video con transparencia (sin fondo)
 ]
 
 
