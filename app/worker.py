@@ -124,6 +124,8 @@ def do_bgremove(job, prog: Progress) -> dict:
         src["path"], info, config.MEDIA_DIR / m["id"], mode=params.get("mode", "transparent"),
         color=params.get("color", "#ffffff"), image=image, blur=int(params.get("blur", 25)),
         max_height=int(params.get("max_height", 720)), quality=params.get("quality", "normal"),
+        start=float(params.get("start") or 0),
+        length=(float(params["end"]) - float(params.get("start") or 0)) if params.get("end") else None,
         on_progress=lambda f, msg="": prog(f * 0.95, msg))
     prog(0.96, "Analizando el resultado")
     pi = media.probe(out)
@@ -136,12 +138,21 @@ def do_bgremove(job, prog: Progress) -> dict:
           "WHERE id=?", str(out), str(out), wave, pi["duration"], pi["width"], pi["height"], pi["fps"],
           int(pi["has_audio"]), db.jdump([0] if pi["has_audio"] else []), src["audio_silent"],
           int(alpha), m["id"])
-    # Misma pista de audio y mismos tiempos: se reutiliza la transcripción del original
+    # Mismo audio: se reutiliza la transcripción del original, desplazada al tramo procesado
+    t0 = float(params.get("start") or 0)
+    t1 = t0 + pi["duration"]
     tr = db.q1("SELECT * FROM transcripts WHERE media_id=?", src["id"])
     if tr:
+        def cut(items, a="s", b="e"):
+            return [{**w, a: round(max(0.0, w[a] - t0), 3), b: round(min(t1, w[b]) - t0, 3)}
+                    for w in items if (w[a] + w[b]) / 2 >= t0 and (w[a] + w[b]) / 2 <= t1]
+        words = cut(db.jload(tr["words"], []))
+        tl = db.jload(tr["translated"], None)
         db.ex("INSERT OR REPLACE INTO transcripts(media_id, language, words, translated, created_at) "
-              "VALUES (?,?,?,?,?)", m["id"], tr["language"], tr["words"], tr["translated"], db.now())
-    return {"media": m["id"], "file": out.name, "alpha": alpha}
+              "VALUES (?,?,?,?,?)", m["id"], tr["language"], db.jdump(words),
+              db.jdump(cut(tl)) if isinstance(tl, list) else None, db.now())
+    return {"media": m["id"], "file": out.name, "alpha": alpha, "source_id": src["id"],
+            "start": t0, "end": t1, "target": params.get("target"), "item_id": params.get("item_id")}
 
 
 def do_render(job, prog: Progress) -> dict:

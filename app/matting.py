@@ -72,6 +72,7 @@ def _even(v: float) -> int:
 def remove_background(src: str, info: dict, dst_base: Path, mode: str = "transparent",
                       color: str = "#ffffff", image: str | None = None, blur: int = 25,
                       max_height: int = 720, quality: str = "normal",
+                      start: float = 0.0, length: float | None = None,
                       on_progress: Callable[[float, str], None] | None = None) -> Path:
     """Genera el video sin fondo. Devuelve la ruta creada (.webm si es transparente, .mp4 si no).
 
@@ -88,12 +89,15 @@ def remove_background(src: str, info: dict, dst_base: Path, mode: str = "transpa
     W = _even(sw * H / sh)
     fps = info.get("fps") or 30
     fps = min(fps, 60)
-    dur = float(info.get("duration") or 0)
+    start = max(0.0, float(start or 0))
+    full = float(info.get("duration") or 0)
+    dur = min(float(length), max(0.05, full - start)) if length else max(0.05, full - start)
+    seek = ["-ss", f"{start:.3f}", "-t", f"{dur:.3f}"]   # solo el tramo pedido (p. ej., un clip)
     total = max(1, int(dur * fps))
     dr = min(1.0, QUALITY_PX.get(quality, 512) / max(W, H))
 
     dec = subprocess.Popen(
-        ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", src, "-map", "0:v:0",
+        ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", *seek, "-i", src, "-map", "0:v:0",
          "-vf", f"fps={fps:g},scale={W}:{H}:flags=bicubic,format=rgb24",
          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -109,7 +113,7 @@ def remove_background(src: str, info: dict, dst_base: Path, mode: str = "transpa
         fl.append("[bg][0:v]overlay=shortest=1:format=auto[v]")
         vout = "v"
     elif mode == "blur":
-        enc += ["-i", src]
+        enc += [*seek, "-i", src]
         b = max(5, min(60, int(blur)))
         fl.append(f"[1:v]fps={fps:g},scale={W}:{H},boxblur={b}:2[bg]")
         fl.append("[bg][0:v]overlay=shortest=1:format=auto[v]")
@@ -126,7 +130,7 @@ def remove_background(src: str, info: dict, dst_base: Path, mode: str = "transpa
     amap = info.get("audio_map") or ([0] if info.get("has_audio") else [])
     a_args: list[str] = []
     if amap:
-        enc += ["-i", src]
+        enc += [*seek, "-i", src]
         ai = n_in
         mix = audio_filter(ai, amap, "a")
         if mix:

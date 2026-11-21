@@ -533,6 +533,15 @@ class RemoveBgIn(BaseModel):
     blur: int = Field(25, ge=5, le=60)
     max_height: int = Field(720, ge=360, le=1080)
     quality: str = Field("normal", pattern="^(normal|rapida)$")
+    # Tramo del original (segundos) cuando se aplica a un clip o capa de la línea de tiempo
+    start: float | None = Field(None, ge=0)
+    end: float | None = Field(None, gt=0)
+    target: str | None = Field(None, pattern="^(clip|overlay)$")
+    item_id: str | None = Field(None, max_length=64)
+
+
+def _fmt_s(t: float) -> str:
+    return f"{int(t // 60)}:{t % 60:04.1f}"
 
 
 @app.post("/api/media/{mid}/remove-bg")
@@ -549,6 +558,13 @@ def media_remove_bg(mid: str, body: RemoveBgIn, user=Depends(current_user)):
     stem = Path(m["filename"]).stem[:100]
     label = {"transparent": "sin fondo", "color": "fondo de color", "blur": "fondo desenfocado",
              "image": "fondo de imagen"}[body.mode]
+    if body.start is not None or body.end is not None:
+        a = max(0.0, body.start or 0.0)
+        b = min(float(m["duration"]), body.end or float(m["duration"]))
+        if b - a < 0.1:
+            raise HTTPException(400, "El tramo elegido es demasiado corto")
+        body.start, body.end = a, b
+        label += f", {_fmt_s(a)}–{_fmt_s(b)}"
     ext = ".webm" if body.mode == "transparent" else ".mp4"
     nid = db.new_id()
     db.ex("INSERT INTO media(id, project_id, filename, path, kind, created_at) VALUES (?,?,?,?,?,?)",
@@ -683,6 +699,19 @@ def cancel_job(jid: str, user=Depends(current_user)):
           "WHERE id=? AND status='queued'", db.now(), jid)
     if j["type"] == "bgremove" and j["media_id"] and j["status"] == "queued":
         db.ex("UPDATE media SET status='error' WHERE id=? AND status='processing'", j["media_id"])
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{jid}/applied")
+def job_applied(jid: str, user=Depends(current_user)):
+    """Marca que el editor ya reemplazó el clip por su versión sin fondo (se hace una sola vez)."""
+    j = db.q1("SELECT * FROM jobs WHERE id=?", jid)
+    if not j:
+        raise HTTPException(404)
+    check_project(j["project_id"], user, write=True)
+    res = db.jload(j["result"], None) or {}
+    res["applied"] = True
+    db.ex("UPDATE jobs SET result=? WHERE id=?", db.jdump(res), jid)
     return {"ok": True}
 
 

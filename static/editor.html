@@ -266,9 +266,10 @@
 
 <dialog id="dlgBg">
   <form method="dialog" id="bgForm">
-    <div class="dlg-h"><h3>Quitar el fondo del video</h3></div>
+    <div class="dlg-h"><h3 id="bgTitle">Quitar el fondo del video</h3></div>
     <div class="dlg-b">
-      <p class="muted small" style="margin:0">Recorta a la persona con inteligencia artificial (modelo Robust Video Matting) y crea un <b>video nuevo</b> en la biblioteca; el original no cambia. Funciona mejor con una persona de frente a la cámara, buena iluminación y un fondo que no se mueva.</p>
+      <p class="small" style="margin:0" id="bgIntro"></p>
+      <p class="muted small" style="margin:0">Recorta a la persona con inteligencia artificial (modelo Robust Video Matting). Funciona mejor con una persona de frente a la cámara, buena iluminación y un fondo que no se mueva.</p>
       <label class="f"><span>Fondo nuevo</span>
         <select name="mode">
           <option value="transparent">Transparente: para superponer (⧉) sobre diapositivas o pantalla</option>

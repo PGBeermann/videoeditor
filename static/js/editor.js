@@ -759,7 +759,7 @@ function renderTimeline() {
   for (const sg of segments()) {
     const c = sg.clip, m = S.media[c.media_id] || {};
     const d = el('div', { class: 'tl-item clip' + (m.kind === 'image' ? ' img' : '') + (isSel('clip', c.id) ? ' sel' : ''), title: m.filename || '' },
-      el('span', { class: 'nm' }, (m.filename || 'medio') + (c.mute ? ' 🔇' : '')),
+      el('span', { class: 'nm' }, (S.jobs.some(j => j.type === 'bgremove' && (j.status === 'queued' || j.status === 'running') && j.params?.item_id === c.id) ? '👤⏳ ' : '') + (m.filename || 'medio') + (c.mute ? ' 🔇' : '')),
       el('div', { class: 'h l' }), el('div', { class: 'h r' }));
     Object.assign(d.style, { left: (sg.start * S.pxs) + 'px', width: Math.max(4, clipDur(c) * S.pxs) + 'px' });
     if (m.has_waveform && m.duration) {
@@ -993,6 +993,7 @@ function renderInspector() {
       sec.append(chk('Silenciar audio de este clip', it.mute, v => upd(d => { d.clips.find(x => x.id === it.id).mute = v; }, true)),
         el('label', { class: 'f' }, el('span', {}, 'Ganancia: ', o), r));
     }
+    if (m.kind === 'video' && !m.has_alpha && canEdit()) sec.append(bgButton(m, { start: it.in, end: it.out, target: 'clip', itemId: it.id }));
     sec.append(el('div', { class: 'row' }, el('button', { class: 'btn sm', onclick: () => splitAt(S.t) }, '✂ Dividir en cabezal'), el('button', { class: 'btn sm danger', onclick: deleteSelected }, 'Eliminar')));
   } else if (k === 'overlay') {
     const def = LAYER_TYPES[it.type] || { label: 'Medio superpuesto' };
@@ -1017,6 +1018,7 @@ function renderInspector() {
           el('button', { class: 'btn sm', onclick: () => place(0, Math.max(0, (1 - 0.5 * ar * r) / 2), 0.5) }, 'Mitad izquierda'),
           el('button', { class: 'btn sm', onclick: () => place(0.5, Math.max(0, (1 - 0.5 * ar * r) / 2), 0.5) }, 'Mitad derecha')));
       if (mm.kind === 'video') {
+        if (!mm.has_alpha && canEdit()) sec.append(bgButton(mm, { start: it.in || 0, end: Math.min(mm.duration, (it.in || 0) + (it.end - it.start)), target: 'overlay', itemId: it.id }));
         sec.append(field('Desde (s del video)', num(it.in || 0, 0.1, v => setO(o => { o.in = clamp(v, 0, Math.max(0, mm.duration - 0.2)); o.end = Math.min(o.end, o.start + mm.duration - o.in); }), { min: 0 })));
         if (mm.has_audio) {
           sec.append(chk('Silenciar el sonido de este video', it.mute, v => setO(o => { o.mute = v; })),
@@ -1347,8 +1349,21 @@ $('#btnSilences').onclick = () => {
   seek(Math.min(S.t, duration()));
 };
 /* ================================================================= Quitar el fondo de un video */
-function removeBgDialog(m) {
+function bgButton(m, seg) {
+  const busy = S.jobs.find(j => j.type === 'bgremove' && (j.status === 'queued' || j.status === 'running') && j.params?.item_id === seg.itemId);
+  if (busy) return el('div', { class: 'hint', style: { color: 'var(--amber)' } }, busy.status === 'running' ? `👤 Quitando el fondo… ${Math.round(busy.progress * 100)}%` : '👤 Quitar fondo: en cola');
+  return el('button', { class: 'btn sm', style: { alignSelf: 'flex-start' }, title: 'Recorta a la persona y reemplaza el fondo solo en este tramo', onclick: () => removeBgDialog(m, seg) }, '👤 Quitar fondo de este ' + (seg.target === 'overlay' ? 'video' : 'clip'));
+}
+function removeBgDialog(m, seg = null) {
   const dlg = $('#dlgBg'), f = $('#bgForm');
+  const segLen = seg ? seg.end - seg.start : (m.duration || 0);
+  $('#bgTitle').textContent = seg ? `Quitar el fondo de este ${seg.target === 'overlay' ? 'video superpuesto' : 'clip'}` : 'Quitar el fondo del video';
+  $('#bgIntro').textContent = seg
+    ? `Se procesa solo el tramo ${fmtTime(seg.start)}–${fmtTime(seg.end)} del original y, al terminar, el ${seg.target === 'overlay' ? 'video superpuesto' : 'clip'} se reemplaza en su mismo lugar (Ctrl+Z lo revierte). El video original no cambia.`
+    : 'Crea un video nuevo en la biblioteca con la persona recortada; el original no cambia.';
+  f.mode.value = seg && seg.target === 'clip' ? 'blur' : 'transparent';
+  f.mode.querySelector('[value="transparent"]').textContent = seg && seg.target === 'clip'
+    ? 'Transparente (en la pista «Video» se verá negro; útil en capas ⧉)' : 'Transparente: para superponer (⧉) sobre diapositivas o pantalla';
   const imgs = Object.values(S.media).filter(x => x.kind === 'image' && x.status === 'ready');
   const sel = f.image_media_id; sel.innerHTML = '';
   if (!imgs.length) sel.append(el('option', { value: '' }, 'Primero suba una imagen en «Medios»'));
@@ -1359,20 +1374,21 @@ function removeBgDialog(m) {
     $$('#dlgBg .bg-opt').forEach(n => n.classList.toggle('hidden', n.dataset.for !== f.mode.value));
     $('#bgBlurV').textContent = f.blur.value;
     // Referencia medida: ≈8 cuadros/s (rápida) y ≈4,5 cuadros/s (normal) a 720p con 2 vCPU
-    const fpsProc = f.quality.value === 'rapida' ? 8 : 4.5, frames = (m.duration || 0) * Math.min(m.fps || 30, 60);
+    const fpsProc = f.quality.value === 'rapida' ? 8 : 4.5, frames = segLen * Math.min(m.fps || 30, 60);
     const min = Math.max(1, Math.round(frames / fpsProc / 60));
-    $('#bgEstimate').textContent = `«${m.filename}» · ${fmtTime(m.duration)}. Tiempo estimado en un servidor de 2 núcleos: unos ${min} min (menos con más núcleos). Puede seguir editando mientras tanto.`;
+    $('#bgEstimate').textContent = `«${m.filename}» · ${fmtTime(segLen)}${seg ? ' (solo este tramo)' : ''}. Tiempo estimado en un servidor de 2 núcleos: unos ${min} min (menos con más núcleos). Puede seguir editando mientras tanto.`;
   };
   f.onchange = f.oninput = sync; sync();
   f.onsubmit = async e => {
     if (e.submitter?.value !== 'ok') return;
     e.preventDefault();
     const body = { mode: f.mode.value, color: f.color.value, blur: +f.blur.value, max_height: +f.max_height.value, quality: f.quality.value };
+    if (seg) Object.assign(body, { start: seg.start, end: seg.end, target: seg.target, item_id: seg.itemId });
     if (body.mode === 'image') { if (!sel.value) { toast('Suba primero una imagen a la biblioteca', true); return; } body.image_media_id = sel.value; }
     try {
       const r = await API.post(`/api/media/${m.id}/remove-bg`, body);
       dlg.close();
-      toast('Quitando el fondo en el servidor. El video nuevo aparecerá en la biblioteca.');
+      toast(seg ? 'Quitando el fondo en el servidor. El clip se reemplazará solo al terminar; puede seguir editando.' : 'Quitando el fondo en el servidor. El video nuevo aparecerá en la biblioteca.', false, 6000);
       const list = await API.get(`/api/projects/${PID}/media`);
       list.forEach(x => { if (!S.media[x.id]) S.media[x.id] = x; });
       renderMedia(); pollJobs();
@@ -1380,6 +1396,32 @@ function removeBgDialog(m) {
     } catch (err) { toast(err.message, true); }
   };
   dlg.showModal();
+}
+/* Al terminar un «quitar fondo» de un clip o capa, se reemplaza el medio en su lugar (una sola vez) */
+S.bgApplied = new Set();
+function applyBgSwaps() {
+  if (!S.data || !canEdit()) return;
+  for (const j of S.jobs) {
+    const r = j.result;
+    if (j.type !== 'bgremove' || j.status !== 'done' || !r || !r.target || r.applied || S.bgApplied.has(j.id)) continue;
+    const nm = S.media[r.media];
+    if (!nm || nm.status !== 'ready') continue;
+    S.bgApplied.add(j.id);
+    const eps = 0.05, inside = (a, b) => a >= r.start - eps && b <= r.end + eps;
+    let n = 0;
+    const doSwap = d => {
+      for (const c of d.clips) if (c.media_id === r.source_id && inside(c.in, c.out)) {
+        c.media_id = r.media; c.in = Math.max(0, c.in - r.start); c.out = Math.min(nm.duration, c.out - r.start); n++;
+      }
+      for (const o of d.overlays) if (o.type === 'media' && o.params?.media_id === r.source_id && inside(o.in || 0, (o.in || 0) + (o.end - o.start))) {
+        o.params.media_id = r.media; o.in = Math.max(0, (o.in || 0) - r.start); n++;
+      }
+    };
+    const probe = JSON.parse(JSON.stringify(D())); doSwap(probe);
+    if (n) { n = 0; change(doSwap); computeWords(); toast(`Fondo quitado: ${n === 1 ? 'el clip se reemplazó' : n + ' clips se reemplazaron'} en la línea de tiempo (Ctrl+Z para revertir).`, false, 7000); }
+    else toast('Fondo quitado. El clip original ya no está en la línea de tiempo: el video nuevo quedó en la biblioteca.', false, 7000);
+    API.post(`/api/jobs/${j.id}/applied`).catch(() => { });
+  }
 }
 /* ================================================================= Eliminar silencios (por audio, sin transcripción) */
 const SIL = { cache: {}, ranges: [], token: 0 };
@@ -1705,7 +1747,7 @@ async function pollJobs() {
       if (j.status === 'error') toast(`${({ ingest: 'Procesamiento', transcribe: 'Transcripción', render: 'Render', bgremove: 'Quitar el fondo' })[j.type]} falló: ${j.message}`, true, 8000);
       else if (j.type === 'ingest') mediaChanged = true;
       else if (j.type === 'transcribe') { await loadTranscript(j.media_id); computeWords(); renderTranscript(); renderMedia(); updateStage(); toast('Transcripción lista: ' + (j.filename || '')); }
-      else if (j.type === 'bgremove') { mediaChanged = true; toast('Fondo quitado: el video nuevo ya está en la biblioteca.', false, 6000); }
+      else if (j.type === 'bgremove') { mediaChanged = true; if (!j.result?.target) toast('Fondo quitado: el video nuevo ya está en la biblioteca.', false, 6000); }
       else if (j.type === 'render') { loadExports(); toast('¡Video exportado! Véalo en «Exportados».', false, 6000); }
     }
   }
@@ -1717,6 +1759,13 @@ async function pollJobs() {
       if (m && m.status === 'ready') { S.pendingAdd.splice(S.pendingAdd.indexOf(pa), 1); if (pa.dur) m._dur = pa.dur; addMediaToTimeline(m, pa.at, pa.role); }
       else if (m && m.status === 'error') S.pendingAdd.splice(S.pendingAdd.indexOf(pa), 1);
     }
+  }
+  applyBgSwaps();
+  // Indicador «quitando fondo» en el clip y en el inspector mientras se procesa
+  const bgActive = S.jobs.filter(j => j.type === 'bgremove' && j.params?.item_id && (j.status === 'queued' || j.status === 'running' || prevActive.includes(j.id)));
+  if (bgActive.length) {
+    renderTimeline();
+    if (S.sel && bgActive.some(j => j.params.item_id === S.sel.id) && !$('#inspector').contains(document.activeElement)) renderInspector();
   }
   renderMedia(); renderJobs();
   if (!$('[data-panel="exports"]').classList.contains('hidden')) renderExports();
