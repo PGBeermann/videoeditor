@@ -263,10 +263,11 @@ def delete_project(pid: str, user=Depends(current_user)):
 
 
 def _purge_project_files(pid: str) -> None:
-    for r in db.q("SELECT path, proxy_path, waveform_path FROM media WHERE project_id=?", pid):
+    for r in db.q("SELECT id, path, proxy_path, waveform_path FROM media WHERE project_id=?", pid):
         for p in (r["path"], r["proxy_path"], r["waveform_path"]):
             if p:
                 Path(p).unlink(missing_ok=True)
+        _drop_silence_cache(r["id"])
     for r in db.q("SELECT path FROM assets WHERE project_id=?", pid):
         Path(r["path"]).unlink(missing_ok=True)
     for r in db.q("SELECT id FROM exports WHERE project_id=?", pid):
@@ -445,6 +446,11 @@ def _media_for(mid: str, user: dict, write: bool = False):
     return m
 
 
+def _drop_silence_cache(mid: str) -> None:
+    for f in config.PROXY_DIR.glob(f"{mid}_sil_*.json"):
+        f.unlink(missing_ok=True)
+
+
 @app.get("/api/projects/{pid}/media")
 def list_media(pid: str, user=Depends(current_user)):
     check_project(pid, user)
@@ -457,6 +463,7 @@ def delete_media(mid: str, user=Depends(current_user)):
     for p in (m["path"], m["proxy_path"], m["waveform_path"]):
         if p:
             Path(p).unlink(missing_ok=True)
+    _drop_silence_cache(mid)
     db.ex("DELETE FROM media WHERE id=?", mid)
     return {"ok": True}
 
@@ -478,6 +485,28 @@ def media_wave(mid: str, user=Depends(current_user)):
     if not m["waveform_path"]:
         raise HTTPException(404)
     return FileResponse(m["waveform_path"], headers={"Cache-Control": "private, max-age=86400"})
+
+
+class SilencesIn(BaseModel):
+    noise_db: float = Field(-35.0, ge=-70, le=-15)
+    min_dur: float = Field(0.7, ge=0.2, le=10)
+
+
+@app.post("/api/media/{mid}/silences")
+def media_silences(mid: str, body: SilencesIn, user=Depends(current_user)):
+    """Detecta los silencios del audio de un medio (no requiere transcripción)."""
+    from .media import FFmpegError, detect_silences
+    m = _media_for(mid, user)
+    if not m["has_audio"]:
+        return {"silences": [], "has_audio": False}
+    src = m["proxy_path"] if m["proxy_path"] and Path(m["proxy_path"]).exists() else m["path"]
+    if not src or not Path(src).exists():
+        raise HTTPException(409, "El medio aún se está procesando")
+    try:
+        sil = detect_silences(src, body.noise_db, body.min_dur, config.PROXY_DIR, mid)
+    except FFmpegError as e:
+        raise HTTPException(500, f"No se pudo analizar el audio: {e}")
+    return {"silences": sil, "has_audio": True}
 
 
 class TranscribeIn(BaseModel):

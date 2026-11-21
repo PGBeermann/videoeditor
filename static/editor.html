@@ -147,6 +147,7 @@
     <button class="btn sm icon" id="btnFwd" title="+5 s (L)">»</button>
     <span class="mono tc"><span id="tcNow">0:00.0</span> <span class="muted">/ <span id="tcDur">0:00</span></span></span>
     <div class="grow"></div>
+    <button class="btn sm" id="btnSilAudio" title="Detecta las pausas en el audio y las elimina del video (no requiere transcripción)">🔇 Eliminar silencios</button>
     <button class="btn sm" id="btnSplit" title="Dividir en el cabezal el clip, audio o capa seleccionado (S)">✂ Dividir</button>
     <button class="btn sm" id="btnPhone" title="Abrir la vista previa en una ventana que simula un celular">📱 Vista en celular</button>
     <label class="chk small"><input type="checkbox" id="showCaps" checked> Subtítulos</label>
@@ -240,6 +241,27 @@
   <div class="dlg-h"><h3 id="anTitle">Analítica</h3></div>
   <div class="dlg-b" id="anBody"></div>
   <div class="dlg-f"><button class="btn" onclick="this.closest('dialog').close()">Cerrar</button></div>
+</dialog>
+
+<dialog id="dlgSil" class="floating">
+  <div class="dlg-h"><h3 class="grow">Eliminar silencios</h3><button class="btn sm icon ghost" id="silClose" title="Cerrar">✕</button></div>
+  <div class="dlg-b">
+    <p class="muted small" style="margin:0">Se analiza el audio de cada clip de la pista «Video». Las pausas aparecen en rojo en la línea de tiempo; revíselas y reprodúzcalas antes de eliminarlas.</p>
+    <label class="f"><span>Sensibilidad (nivel bajo el cual se considera silencio)</span>
+      <select id="silDb">
+        <option value="-30">−30 dB · Ruido de fondo alto (aula, ventilador)</option>
+        <option value="-35" selected>−35 dB · Normal (recomendado)</option>
+        <option value="-40">−40 dB · Grabación silenciosa</option>
+        <option value="-45">−45 dB · Micrófono de estudio, sin ruido</option>
+      </select></label>
+    <div class="grid2">
+      <label class="f"><span>Pausa mínima a eliminar (s)</span><input type="number" id="silMin" value="0.7" min="0.3" max="5" step="0.1"></label>
+      <label class="f"><span>Margen que se conserva (s)</span><input type="number" id="silPad" value="0.15" min="0" max="1" step="0.05"></label>
+    </div>
+    <p class="muted small" style="margin:0">El margen deja un respiro natural antes y después de cada frase. No se recortan los clips silenciados, ni los tramos con narración (🎙) o con un video superpuesto que tenga sonido.</p>
+    <div id="silResult" class="card small" style="padding:10px 12px">Pulse «Analizar».</div>
+  </div>
+  <div class="dlg-f"><button class="btn" id="silAnalyze">Analizar</button><button class="btn primary" id="silApply" disabled>Eliminar silencios</button></div>
 </dialog>
 
 <dialog id="dlgHelp">

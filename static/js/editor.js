@@ -68,6 +68,7 @@ function afterChange(silent) {
   S.dirty = true; setSave('pending');
   clearTimeout(S.saveTimer); S.saveTimer = setTimeout(save, 1200);
   computeWords();
+  if ($('#dlgSil')?.open) { S.silPreview = null; $('#silApply').disabled = true; analyzeSilences(); }
   if (!silent) renderAll(); else { renderTimeline(); updateStage(); }
 }
 function undo() {
@@ -752,7 +753,8 @@ function renderTimeline() {
     const isMajor = Math.abs(t / major - Math.round(t / major)) < 1e-6;
     ruler.appendChild(el('div', { class: 'tick' + (isMajor ? '' : ' minor'), style: { left: (t * S.pxs) + 'px' } }, isMajor ? fmtTime(t) : ''));
   }
-  const tracks = {}; $$('.tl-track').forEach(tr => { tr.querySelectorAll('.tl-item,.tl-mark').forEach(n => n.remove()); tracks[tr.dataset.track] = tr; });
+  const tracks = {}; $$('.tl-track').forEach(tr => { tr.querySelectorAll('.tl-item,.tl-mark,.tl-sil').forEach(n => n.remove()); tracks[tr.dataset.track] = tr; });
+  for (const [a, b] of S.silPreview || []) tracks.clips.appendChild(el('div', { class: 'tl-sil', style: { left: (a * S.pxs) + 'px', width: Math.max(2, (b - a) * S.pxs) + 'px' } }));
   // clips
   for (const sg of segments()) {
     const c = sg.clip, m = S.media[c.media_id] || {};
@@ -1340,6 +1342,103 @@ $('#btnSilences').onclick = () => {
   toast(`${ranges.length} silencios eliminados (${total.toFixed(1)} s). Ctrl+Z para deshacer.`);
   seek(Math.min(S.t, duration()));
 };
+/* ================================================================= Eliminar silencios (por audio, sin transcripción) */
+const SIL = { cache: {}, ranges: [], token: 0 };
+function silParams() {
+  return { noise_db: +$('#silDb').value, min_dur: clamp(parseFloat($('#silMin').value) || 0.7, 0.3, 5),
+           pad: clamp(parseFloat($('#silPad').value) || 0, 0, 1) };
+}
+async function silencesOf(mid, p) {
+  const k = `${mid}|${p.noise_db}|${p.min_dur}`;
+  if (!SIL.cache[k]) SIL.cache[k] = API.post(`/api/media/${mid}/silences`, { noise_db: p.noise_db, min_dur: p.min_dur })
+    .then(r => r.silences).catch(e => { delete SIL.cache[k]; throw e; });
+  return SIL.cache[k];
+}
+/* Tramos (en tiempo de la línea) donde no se debe cortar: narraciones y videos superpuestos con sonido */
+function silProtected() {
+  const out = [];
+  for (const mu of D().music) {
+    if (mu.role !== 'voice') continue;
+    const m = S.media[mu.media_id] || {}; const len = (mu.out ?? m.duration ?? 0) - (mu.in || 0);
+    if (len > 0 && (mu.volume ?? 1) > 0) out.push([mu.start, mu.start + len]);
+  }
+  for (const o of D().overlays) {
+    if (o.type !== 'media' || o.mute || (o.volume ?? 1) <= 0) continue;
+    const m = S.media[o.params?.media_id] || {};
+    if (m.kind === 'video' && m.has_audio && !m.audio_silent) out.push([o.start, o.end]);
+  }
+  return out;
+}
+function subtractRanges(ranges, cuts) {
+  let res = ranges;
+  for (const [x, y] of cuts) {
+    const nx = [];
+    for (const [a, b] of res) {
+      if (y <= a || x >= b) { nx.push([a, b]); continue; }
+      if (x > a) nx.push([a, x]);
+      if (y < b) nx.push([y, b]);
+    }
+    res = nx;
+  }
+  return res;
+}
+async function analyzeSilences() {
+  const p = silParams(), tok = ++SIL.token, box = $('#silResult');
+  $('#silApply').disabled = true;
+  if (!D().clips.length) { box.textContent = 'La línea de tiempo está vacía.'; return; }
+  box.textContent = 'Analizando el audio…';
+  const raw = [];
+  try {
+    for (const sg of segments()) {
+      const c = sg.clip, m = S.media[c.media_id] || {};
+      if (c.mute || m.kind === 'image' || !m.has_audio || m.status !== 'ready') continue;
+      const list = await silencesOf(c.media_id, p);
+      if (tok !== SIL.token) return;
+      for (const [s, e] of list) {
+        const a = Math.max(s, c.in), b = Math.min(e, c.out);
+        if (b > a) raw.push([sg.start + (a - c.in), sg.start + (b - c.in)]);
+      }
+    }
+  } catch (err) { if (tok === SIL.token) box.textContent = 'Error: ' + err.message; return; }
+  // Une los tramos contiguos (un silencio puede continuar en el clip siguiente)
+  raw.sort((x, y) => x[0] - y[0]);
+  const merged = [];
+  for (const r of raw) { const l = merged[merged.length - 1]; if (l && r[0] - l[1] < 0.02) l[1] = Math.max(l[1], r[1]); else merged.push([...r]); }
+  const T = duration();
+  let ranges = merged.filter(([a, b]) => b - a >= p.min_dur)
+    .map(([a, b]) => [a <= 0.01 ? 0 : a + p.pad, b >= T - 0.01 ? T : b - p.pad]);
+  ranges = subtractRanges(ranges, silProtected()).filter(([a, b]) => b - a >= 0.1);
+  SIL.ranges = ranges; S.silPreview = ranges; renderTimeline();
+  const total = ranges.reduce((a, [x, y]) => a + (y - x), 0);
+  if (!ranges.length) { box.textContent = `No se encontraron pausas de ${p.min_dur} s o más con esta sensibilidad.`; return; }
+  box.innerHTML = '';
+  box.append(el('div', {}, el('b', {}, `${ranges.length} pausas · ${total.toFixed(1)} s`), ` (${(100 * total / T).toFixed(0)} % del video)`),
+    el('div', { class: 'muted' }, `Duración: ${fmtTime(T)} → ${fmtTime(T - total)}. Haga clic en una pausa para escucharla:`),
+    el('div', { class: 'row wrap', style: { gap: '4px', marginTop: '6px', maxHeight: '120px', overflowY: 'auto' } },
+      ...ranges.map(([a, b]) => el('button', { class: 'btn sm', onclick: () => { seek(Math.max(0, a - 1)); play(); } }, `${fmtTime(a)} · ${(b - a).toFixed(1)} s`))));
+  $('#silApply').disabled = !canEdit();
+}
+function closeSilDlg() { SIL.token++; S.silPreview = null; SIL.ranges = []; $('#dlgSil').close(); renderTimeline(); }
+$('#btnSilAudio').onclick = () => {
+  if (!canEdit()) { toast('Su rol de revisor no permite editar', true); return; }
+  const dlg = $('#dlgSil');
+  if (dlg.open) { closeSilDlg(); return; }
+  dlg.show(); analyzeSilences();
+};
+$('#silClose').onclick = closeSilDlg;
+$('#dlgSil').addEventListener('cancel', e => { e.preventDefault(); closeSilDlg(); });
+$('#silAnalyze').onclick = analyzeSilences;
+['#silDb', '#silMin', '#silPad'].forEach(q => $(q).addEventListener('change', analyzeSilences));
+$('#silApply').onclick = () => {
+  const ranges = SIL.ranges.slice();
+  if (!ranges.length) return;
+  if (S.playing) pause();
+  const total = ranges.reduce((a, [x, y]) => a + (y - x), 0);
+  change(() => { for (const [a, b] of ranges.slice().reverse()) cutRange(a, b, { inPlace: true }); });
+  closeSilDlg();
+  seek(Math.min(S.t, duration()));
+  toast(`${ranges.length} silencios eliminados (${total.toFixed(1)} s). Ctrl+Z para deshacer.`);
+};
 $('#txSearch').addEventListener('input', debounce(renderTranscript, 200));
 $('#silenceSec').addEventListener('change', renderTranscript);
 
@@ -1635,7 +1734,7 @@ $('#projName').addEventListener('change', e => { S.name = e.target.value.trim() 
 document.addEventListener('keydown', e => {
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
-  if (document.querySelector('dialog[open]')) return;
+  if (document.querySelector('dialog[open]:not(.floating)')) return;
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
   if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && k === 'y') { e.preventDefault(); redo(); return; }

@@ -94,6 +94,53 @@ def analyze_audio(path: str | Path, n_streams: int, seconds: int = 900) -> dict:
             "silent": n_streams > 0 and not useful, "peaks": peaks}
 
 
+def detect_silences(path: str | Path, noise_db: float = -35.0, min_dur: float = 0.7,
+                    cache_dir: Path | None = None, key: str = "") -> list[list[float]]:
+    """Tramos de silencio [inicio, fin] (s) del audio, con el filtro silencedetect de FFmpeg.
+
+    Se analiza el audio del proxy (la pista ya elegida y mezclada), sin decodificar video.
+    Un silencio es todo tramo cuyo nivel permanece bajo `noise_db` (dBFS) durante al menos
+    `min_dur` segundos. El resultado se guarda en caché junto al proxy.
+    """
+    noise_db = max(-70.0, min(-15.0, float(noise_db)))
+    min_dur = max(0.2, min(10.0, float(min_dur)))
+    cache = None
+    if cache_dir and key:
+        cache = Path(cache_dir) / f"{key}_sil_{noise_db:g}_{min_dur:g}.json"
+        if cache.exists() and cache.stat().st_mtime >= Path(path).stat().st_mtime:
+            try:
+                return json.loads(cache.read_text())
+            except (OSError, ValueError):
+                pass
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-vn", "-sn", "-dn",
+                          "-i", str(path), "-map", "0:a:0",
+                          "-af", f"aformat=channel_layouts=mono,silencedetect=noise={noise_db:g}dB:d={min_dur:g}",
+                          "-f", "null", "-"], capture_output=True, text=True, timeout=1800)
+    if out.returncode != 0:
+        raise FFmpegError(out.stderr.strip()[-600:] or "No se pudo analizar el audio")
+    res, start = [], None
+    for line in out.stderr.splitlines():
+        m = re.search(r"silence_start:\s*(-?[\d.]+)", line)
+        if m:
+            start = max(0.0, float(m.group(1)))
+            continue
+        m = re.search(r"silence_end:\s*(-?[\d.]+)", line)
+        if m and start is not None:
+            res.append([round(start, 3), round(float(m.group(1)), 3)])
+            start = None
+    if start is not None:  # el audio termina en silencio
+        m = re.findall(r"time=(\d+):(\d+):([\d.]+)", out.stderr)
+        end = (int(m[-1][0]) * 3600 + int(m[-1][1]) * 60 + float(m[-1][2])) if m else start
+        if end - start >= min_dur:
+            res.append([round(start, 3), round(end, 3)])
+    if cache:
+        try:
+            cache.write_text(json.dumps(res))
+        except OSError:
+            pass
+    return res
+
+
 def audio_filter(input_idx: int | str, audio_map: list[int], out_label: str) -> str | None:
     """Filtro que combina las pistas elegidas en una sola (None si basta mapear una)."""
     if len(audio_map) <= 1:

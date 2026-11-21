@@ -10,6 +10,7 @@ y exporta MP4, subtítulos y paquetes SCORM para Moodle. Se despliega con Docker
 |---|---|
 | Grabación | Pantalla + cámara (PiP circular o rectangular), solo pantalla, solo cámara, pizarra blanca + cámara; anotaciones a mano alzada que quedan grabadas; teleprompter con velocidad, tamaño y modo espejo; cuenta regresiva; pausa; medidor de nivel; mezcla de micrófono y audio del sistema |
 | Edición | Línea de tiempo con pistas de video, capas, zoom, música y marcas; recortar, dividir, reordenar; deshacer/rehacer; atajos de teclado; autoguardado con control de versiones |
+| Eliminar silencios | Botón «🔇 Eliminar silencios» en la barra de reproducción: detecta las pausas directamente del audio con el filtro `silencedetect` de FFmpeg (no requiere transcripción), con sensibilidad de −30 a −45 dBFS, pausa mínima y margen ajustables; marca las pausas en rojo en la línea de tiempo para revisarlas antes de cortar, respeta los clips silenciados, las narraciones y los videos superpuestos con sonido, y se deshace con Ctrl+Z |
 | Edición por texto | Transcripción automática con marcas de tiempo por palabra (faster-whisper); borrar palabras recorta el video; detección de muletillas; recorte automático de silencios; corrección de palabras para los subtítulos |
 | Contenido científico | Ecuaciones LaTeX (MathJax 3), fórmulas y reacciones químicas con mhchem (`\ce{...}`), estructuras moleculares desde SMILES (RDKit.js), flechas, recuadros, rótulos, imágenes, portada institucional |
 | Zoom | Acercamiento animado a un área con transición suave |
