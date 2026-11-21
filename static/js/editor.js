@@ -124,6 +124,8 @@ async function load() {
   const add = new URLSearchParams(location.search).get('add');
   if (add && S.media[add]) { S.pendingAdd.push({ mid: add, at: 'end' }); history.replaceState(null, '', location.pathname); }
   computeWords(); applyLayout(); fitStage(); renderAll(); seek(0); loadComments(); loadExports();
+  // Capas gráficas creadas o modificadas desde el conector de Claude (sin imagen aún): se dibujan aquí
+  if (canEdit()) for (const ov of D().overlays) if (ov.type !== 'media' && !ov.asset_id && (ov.type !== 'image' || ov.params?.src)) rasterize(ov);
   for (const pa of [...S.pendingAdd]) {
     const m = S.media[pa.mid];
     if (m && m.status === 'ready') { S.pendingAdd.splice(S.pendingAdd.indexOf(pa), 1); addMediaToTimeline(m, pa.at); }

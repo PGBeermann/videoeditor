@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, captions, config, db, scorm
+from . import auth, captions, config, db, oauth, scorm
 from .auth import check_project, current_user, require_admin
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,12 +20,18 @@ STATIC = ROOT / "static"
 @asynccontextmanager
 async def lifespan(_app):
     db.init_db()
+    oauth.init()
     auth.bootstrap_admin()
     yield
 
 
 app = FastAPI(title="Estudio de Video Educativo", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+# Conector MCP remoto (Claude): servidor OAuth 2.1 + endpoint /mcp
+from . import mcp_server, mcp_tools_extra  # noqa: E402,F401  (registra las herramientas)
+app.include_router(oauth.router)
+app.include_router(mcp_server.router)
 
 
 @app.middleware("http")

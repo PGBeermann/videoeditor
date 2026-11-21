@@ -151,9 +151,45 @@ def do_bgremove(job, prog: Progress) -> dict:
         db.ex("INSERT OR REPLACE INTO transcripts(media_id, language, words, translated, created_at) "
               "VALUES (?,?,?,?,?)", m["id"], tr["language"], db.jdump(words),
               db.jdump(cut(tl)) if isinstance(tl, list) else None, db.now())
-    return {"media": m["id"], "file": out.name, "alpha": alpha, "source_id": src["id"],
-            "start": t0, "end": t1, "target": params.get("target"), "item_id": params.get("item_id"),
-            "placement": params.get("placement", "replace")}
+    result = {"media": m["id"], "file": out.name, "alpha": alpha, "source_id": src["id"],
+              "start": t0, "end": t1, "target": params.get("target"), "item_id": params.get("item_id"),
+              "placement": params.get("placement", "replace")}
+    if params.get("server_apply") and params.get("target") == "clip":
+        result["applied"] = _apply_bg_to_project(job["project_id"], result, pi)
+    return result
+
+
+def _apply_bg_to_project(pid: str, r: dict, pi: dict) -> bool:
+    """Aplica en el proyecto el resultado de «quitar fondo» de un clip (pedido desde el conector MCP):
+    añade la persona recortada como capa encima o reemplaza el clip (igual que el editor)."""
+    with db.tx() as c:
+        row = c.execute("SELECT data FROM projects WHERE id=?", (pid,)).fetchone()
+        if not row:
+            return False
+        d = db.jload(row["data"], {})
+        W0, H0 = d["settings"]["width"], d["settings"]["height"]
+        eps, n, t0 = 0.05, 0, 0.0
+        for cl in d.get("clips", []):
+            dur = max(0.0, cl["out"] - cl["in"])
+            if cl["media_id"] == r["source_id"] and cl["in"] >= r["start"] - eps and cl["out"] <= r["end"] + eps:
+                n += 1
+                if r["placement"] == "layer":
+                    mw, mh = pi["width"] or W0, pi["height"] or H0
+                    k = max(W0 / mw, H0 / mh) if cl.get("fit") == "cover" else min(W0 / mw, H0 / mh)
+                    w, h = mw * k / W0, mh * k / H0
+                    d.setdefault("overlays", []).append({
+                        "id": secrets.token_hex(6), "type": "media", "params": {"media_id": r["media"]},
+                        "start": t0, "end": t0 + dur, "in": max(0.0, cl["in"] - r["start"]),
+                        "x": (1 - w) / 2, "y": (1 - h) / 2, "w": w, "h": h,
+                        "opacity": 1, "fade": 0, "volume": 1, "mute": True})
+                else:
+                    cl["media_id"] = r["media"]
+                    cl["in"], cl["out"] = max(0.0, cl["in"] - r["start"]), cl["out"] - r["start"]
+            t0 += dur
+        if n:
+            c.execute("UPDATE projects SET data=?, version=version+1, updated_at=? WHERE id=?",
+                      (db.jdump(d), db.now(), pid))
+    return True
 
 
 def do_render(job, prog: Progress) -> dict:

@@ -25,6 +25,37 @@ y exporta MP4, subtítulos y paquetes SCORM para Moodle. Se despliega con Docker
 | Analítica | Vistas, retención por tramos de 5 s y estadísticas de respuestas por pregunta |
 | Administración | Usuarios con rol administrador o docente; contraseñas con scrypt; protección CSRF y límite de intentos de acceso |
 
+## Conector MCP para Claude
+
+El editor incluye un servidor **MCP remoto** (transporte *Streamable HTTP*) en `https://<dominio>/mcp`, protegido con **OAuth 2.1**, para manejar el Estudio desde Claude. Expone 48 herramientas con los mismos permisos del usuario que autoriza (propietario, editor o revisor). Cubren:
+
+- **Proyectos:** listar, ver, crear, renombrar, eliminar y compartir.
+- **Medios:** listar, importar desde URL, eliminar y ver un fotograma.
+- **Línea de tiempo:** añadir, recortar, dividir, mover, ajustar y eliminar clips o tramos.
+- **Edición por texto:** buscar en lo dicho, detectar y quitar muletillas, corregir la transcripción.
+- **Silencios:** detectar y eliminar.
+- **Capas:** texto, rótulo, LaTeX, química, molécula, flecha y recuadro; superponer videos o imágenes; modificar, ordenar, poner sombra y eliminar.
+- **Zoom.**
+- **Audio:** procesamiento de la voz, narración y música.
+- **Otros ajustes:** logo, subtítulos, guion del teleprompter y comentarios.
+- **Lección:** capítulos y preguntas.
+- **Procesos del servidor:** transcribir y quitar el fondo, tanto de un video como de un clip (como capa encima o como reemplazo).
+- **Exportaciones:** exportar, ver el estado de los trabajos, publicar, subtítulos SRT, analítica y eliminar.
+
+**Autorización** (implementada en `app/oauth.py`):
+
+- Metadatos del recurso protegido (RFC 9728) en `/.well-known/oauth-protected-resource`.
+- Metadatos del servidor de autorización (RFC 8414) en `/.well-known/oauth-authorization-server`.
+- Registro dinámico de clientes (RFC 7591) en `/oauth/register`.
+- Código de autorización con PKCE S256 (`/oauth/authorize`, `/oauth/token`).
+- Tokens de acceso de 1 h y *refresh tokens* rotativos.
+- Sin token, `/mcp` responde `401` con `WWW-Authenticate: Bearer resource_metadata=…`.
+- El docente inicia sesión con su cuenta del Estudio y aprueba el acceso en una pantalla de consentimiento.
+
+**Registrar en Claude** (planes Pro, Max, Team o Enterprise): **Configuración → Conectores → Agregar conector personalizado**. Escriba la URL `https://videoeditor.vipcursos.cloud/mcp`, deje vacía la configuración avanzada (Claude se registra solo) y pulse **Conectar**. La URL de retorno que usa Claude es `https://claude.ai/api/mcp/auth_callback`.
+
+Las capas gráficas creadas desde Claude (texto, LaTeX, química, moléculas) se dibujan en el navegador la próxima vez que se abre el editor. Por eso `exportar_video` avisa si alguna está pendiente.
+
 ## Arquitectura
 
 ```
