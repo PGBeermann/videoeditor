@@ -219,6 +219,25 @@ class Renderer:
         words = captions.all_words(self.p, self.transcripts)
         return captions.build_cues(words)
 
+    def _prep_static(self, src: str, pw: int, op: float, shadow, i: int) -> tuple[Path, int]:
+        """PNG de una capa estática ya escalada, con opacidad y sombra. Devuelve (ruta, margen)."""
+        out = self.wd / f"capa_{i}.png"
+        chain = f"[0:v]scale={pw}:-2:flags=lanczos,format=rgba"
+        if op < 0.999:
+            chain += f",colorchannelmixer=aa={_f(op)}"
+        sh = _shadow(shadow, self.W0)
+        m = 0
+        if sh:
+            m, dx, dy, sig, rgb, sop = sh
+            blur = f",gblur=sigma={_f(sig)}" if sig > 0.3 else ""
+            g = (f"{chain},split[f][s];[s]lutrgb=r={rgb[0]}:g={rgb[1]}:b={rgb[2]}:a=val*{_f(sop)},"
+                 f"pad=iw+{2 * m}:ih+{2 * m}:{m + dx}:{m + dy}:color=0x{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}@0"
+                 f"{blur}[sh];[sh][f]overlay={m}:{m}:format=rgb,format=rgba[o]")
+        else:
+            g = f"{chain}[o]"
+        run_ffmpeg(["-i", src, "-filter_complex", g, "-map", "[o]", "-frames:v", "1", "-y", str(out)])
+        return out, m
+
     def stage_b(self, base: Path, cues: list[dict]) -> Path:
         W0, H0, W, H, T, fps = self.W0, self.H0, self.W, self.H, self.T, self.fps
         args = ["-i", str(base)]
@@ -244,13 +263,13 @@ class Renderer:
             x = int(round(float(ov.get("x", 0)) * W0))
             y = int(round(float(ov.get("y", 0)) * H0))
             fade = min(float(ov.get("fade", 0.25)), (e - s) / 3)
+            static = None
             if ov.get("type") == "media":
                 mm = self.media.get((ov.get("params") or {}).get("media_id"))
                 if not mm or mm["kind"] not in ("video", "image"):
                     continue
                 if mm["kind"] == "image":
-                    args += ["-framerate", _f(fps), "-loop", "1", "-t", _f(T), "-i", mm["path"]]
-                    chain = f"[{n}:v]scale={pw}:-2:flags=lanczos,format=rgba"
+                    static = mm["path"]
                 else:
                     mi = max(0.0, float(ov.get("in", 0)))
                     length = min(e - s, max(0.05, mm["duration"] - mi))
@@ -264,11 +283,26 @@ class Renderer:
                     if mm["has_audio"] and not ov.get("mute"):
                         self._fx_audio.append((n, mm, float(ov.get("volume", 1.0)), s, length))
             else:
-                path = self.assets.get(ov.get("asset_id"))
-                if not path:
+                static = self.assets.get(ov.get("asset_id"))
+                if not static:
                     continue
-                args += ["-framerate", _f(fps), "-loop", "1", "-t", _f(T), "-i", path]
-                chain = f"[{n}:v]scale={pw}:-2:flags=lanczos,format=rgba"
+            if static:
+                # Capa estática (texto, LaTeX, imagen…): se prepara UNA vez —escalada, con su
+                # opacidad y su sombra— y entra al render solo durante su tramo visible. Antes cada
+                # capa se procesaba cuadro a cuadro durante todo el video (y la sombra se desenfocaba
+                # en cada cuadro), lo que con muchas capas agotaba la memoria del servidor.
+                png, m = self._prep_static(static, pw, float(ov.get("opacity", 1)), ov.get("shadow"), i)
+                args += ["-framerate", _f(fps), "-loop", "1", "-t", _f(e - s), "-i", str(png)]
+                chain = f"[{n}:v]format=rgba,setpts=PTS-STARTPTS+{_f(s)}/TB"
+                if fade > 0.01:
+                    chain += (f",fade=t=in:st={_f(s)}:d={_f(fade)}:alpha=1,"
+                              f"fade=t=out:st={_f(e - fade)}:d={_f(fade)}:alpha=1")
+                fl.append(f"{chain}[ov{i}]")
+                fl.append(f"[{cur}][ov{i}]overlay=x={x - m}:y={y - m}:enable='between(t,{_f(s)},{_f(e)})'"
+                          f":eof_action=pass[vo{i}]")
+                cur = f"vo{i}"
+                n += 1
+                continue
             op = float(ov.get("opacity", 1))
             if op < 0.999:
                 chain += f",colorchannelmixer=aa={_f(op)}"

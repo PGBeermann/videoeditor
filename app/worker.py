@@ -91,8 +91,14 @@ def do_transcribe(job, prog: Progress) -> dict:
     prog(0.01, f"Cargando modelo Whisper «{config.WHISPER_MODEL}» (la primera vez se descarga)")
     # Se transcribe desde la vista previa: su audio ya combina las pistas con sonido
     src = m["proxy_path"] if m["proxy_path"] and Path(m["proxy_path"]).exists() else m["path"]
-    res = transcribe.transcribe(src, m["duration"], params.get("language", "es"),
-                                bool(params.get("translate")), prog)
+    try:
+        res = transcribe.transcribe(src, m["duration"], params.get("language", "es"),
+                                    bool(params.get("translate")), prog)
+    finally:
+        # Libera el modelo (~1 GB) si no quedan más transcripciones en cola: así un render
+        # posterior no compite por la memoria del servidor.
+        if not db.q1("SELECT 1 FROM jobs WHERE type='transcribe' AND status='queued' LIMIT 1"):
+            transcribe.release_model()
     db.ex("INSERT INTO transcripts(media_id, language, words, translated, created_at) "
           "VALUES (?,?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET language=excluded.language, "
           "words=excluded.words, translated=COALESCE(excluded.translated, transcripts.translated), "

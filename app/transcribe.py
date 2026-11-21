@@ -43,6 +43,15 @@ def get_model():
     return _model
 
 
+def release_model() -> None:
+    """Descarga el modelo de la memoria (se vuelve a cargar en segundos cuando haga falta)."""
+    global _model
+    if _model is not None:
+        _model = None
+        import gc
+        gc.collect()
+
+
 def transcribe(path: str, duration: float, language: str | None = "es",
                translate: bool = False,
                on_progress: Callable[[float, str], None] | None = None) -> dict:
