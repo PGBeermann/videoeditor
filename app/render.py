@@ -27,6 +27,33 @@ FORMATS = {"16:9": (1920, 1080), "9:16": (1080, 1920), "1:1": (1080, 1080)}
 RNNOISE_MODEL = Path(__file__).resolve().parent.parent / "models" / "rnnoise" / "sh.rnnn"
 
 
+def _shadow(sh, W0: int):
+    """Parámetros de la sombra de una capa, en píxeles del cuadro del proyecto.
+
+    sh = {on, color, opacity, dist, angle, blur}; dist y blur en % del ancho del cuadro
+    (igual que la vista previa, que usa CSS drop-shadow con radio = 2σ). angle en grados,
+    sentido de pantalla: 45 = abajo a la derecha.
+    """
+    import math
+    if not isinstance(sh, dict) or not sh.get("on"):
+        return None
+    sop = max(0.0, min(1.0, float(sh.get("opacity", 0.6))))
+    if sop <= 0.01:
+        return None
+    d = max(0.0, min(10.0, float(sh.get("dist", 0.5)))) / 100 * W0
+    a = math.radians(float(sh.get("angle", 45)))
+    dx, dy = int(round(d * math.cos(a))), int(round(d * math.sin(a)))
+    sig = max(0.0, min(5.0, float(sh.get("blur", 0.5)))) / 100 * W0
+    m = int(math.ceil(3 * sig + max(abs(dx), abs(dy)))) + 2
+    m += m % 2
+    c = str(sh.get("color", "#000000")).lstrip("#")
+    try:
+        rgb = (int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+    except (ValueError, IndexError):
+        rgb = (0, 0, 0)
+    return m, dx, dy, sig, rgb, sop
+
+
 def _f(x: float) -> str:
     return f"{x:.4f}".rstrip("0").rstrip(".") if "." in f"{x:.4f}" else str(x)
 
@@ -248,7 +275,20 @@ class Renderer:
             if fade > 0.01:
                 chain += (f",fade=t=in:st={_f(s)}:d={_f(fade)}:alpha=1,"
                           f"fade=t=out:st={_f(e - fade)}:d={_f(fade)}:alpha=1")
-            fl.append(f"{chain}[ov{i}]")
+            sh = _shadow(ov.get("shadow"), W0)
+            if sh:
+                # Sombra paralela: se deriva del alfa de la capa (texto, imagen o video sin fondo),
+                # se tiñe, se desplaza y se desenfoca; la capa se coloca encima en un lienzo con margen.
+                m, dx, dy, sig, rgb, sop = sh
+                fl.append(f"{chain},split[f{i}][s{i}]")
+                blur = f",gblur=sigma={_f(sig)}" if sig > 0.3 else ""
+                fl.append(f"[s{i}]lutrgb=r={rgb[0]}:g={rgb[1]}:b={rgb[2]}:a=val*{_f(sop)},"
+                          f"pad=iw+{2 * m}:ih+{2 * m}:{m + dx}:{m + dy}:color=0x{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}@0"
+                          f"{blur}[sh{i}]")
+                fl.append(f"[sh{i}][f{i}]overlay={m}:{m}:format=rgb,format=rgba[ov{i}]")
+                x, y = x - m, y - m
+            else:
+                fl.append(f"{chain}[ov{i}]")
             fl.append(f"[{cur}][ov{i}]overlay=x={x}:y={y}:enable='between(t,{_f(s)},{_f(e)})'"
                       f":eof_action=pass[vo{i}]")
             cur = f"vo{i}"

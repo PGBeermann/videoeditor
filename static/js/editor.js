@@ -374,6 +374,7 @@ function fitStage() {
   let w = aw, h = aw / r; if (h > ah) { h = ah; w = ah * r; }
   st.style.width = Math.max(50, Math.floor(w)) + 'px'; st.style.height = Math.max(30, Math.floor(h)) + 'px';
   $('#caption').style.fontSize = Math.max(10, h * (H0() > W0() ? 0.032 : 0.045)) + 'px';
+  if (S.data && D().overlays.some(o => o.shadow?.on)) syncLayers();   // la sombra se escala con la vista previa
 }
 window.addEventListener('resize', () => { if (S.data) { applyLayout(); fitStage(); } });
 new ResizeObserver(() => S.data && fitStage()).observe($('#stageWrap'));
@@ -646,6 +647,7 @@ function syncLayers() {
     if (url && im.dataset.src !== url) { im.src = url; im.dataset.src = url; }
     img.style.left = ov.x * 100 + '%'; img.style.top = ov.y * 100 + '%'; img.style.width = ov.w * 100 + '%';
     img.style.opacity = ov.opacity ?? 1;
+    im.style.filter = shadowCss(ov.shadow);
     const selected = S.sel && S.sel.id === ov.id;
     img.classList.toggle('sel', selected); img.classList.toggle('editable', canEdit());
     img.classList.toggle('pending', !isMedia && !ov.asset_id);
@@ -937,6 +939,44 @@ $('#tlScroll').addEventListener('wheel', e => {
   if (e.ctrlKey || e.metaKey) { e.preventDefault(); S.pxs = clamp(S.pxs * (e.deltaY < 0 ? 1.15 : 0.87), 2, 200); $('#tlZoom').value = S.pxs; renderTimeline(); }
 }, { passive: false });
 
+/* ================================================================= Sombra de las capas */
+const SHADOW_DEF = { on: true, color: '#000000', opacity: 0.6, dist: 0.5, angle: 45, blur: 0.5 };
+const SHADOW_PRESETS = {
+  'Suave': { opacity: 0.5, dist: 0.4, angle: 45, blur: 0.6 },
+  'Marcada': { opacity: 0.85, dist: 0.8, angle: 45, blur: 0.12 },
+  'Flotante': { opacity: 0.45, dist: 1.6, angle: 70, blur: 1.4 },
+  'Resplandor': { opacity: 0.9, dist: 0, angle: 45, blur: 0.9 },
+};
+/* dist y blur en % del ancho del cuadro; CSS drop-shadow usa radio = 2σ (igual que gblur del render) */
+function shadowCss(sh) {
+  if (!sh || !sh.on || !(sh.opacity > 0.01)) return '';
+  const sw = $('#stage').clientWidth || 1, a = (sh.angle ?? 45) * Math.PI / 180, d = (sh.dist ?? 0.5) / 100 * sw;
+  const c = sh.color || '#000000', r = parseInt(c.slice(1, 3), 16), g = parseInt(c.slice(3, 5), 16), b = parseInt(c.slice(5, 7), 16);
+  return `drop-shadow(${(d * Math.cos(a)).toFixed(2)}px ${(d * Math.sin(a)).toFixed(2)}px ${(2 * (sh.blur ?? 0.5) / 100 * sw).toFixed(2)}px rgba(${r},${g},${b},${sh.opacity}))`;
+}
+function shadowSection(it) {
+  const box = el('div', { class: 'col', style: { gap: '8px', borderTop: '1px solid var(--line)', paddingTop: '10px', marginTop: '4px' } });
+  const sh = it.shadow || {};
+  const setSh = (fn, re = true) => { change(d => { const o = d.overlays.find(x => x.id === it.id); o.shadow = { ...SHADOW_DEF, ...(o.shadow || {}) }; fn(o.shadow); }, { silent: true }); syncLayers(); if (re) renderInspector(); };
+  const live = key => (v, fin) => liveEdit(() => { it.shadow[key] = v; syncLayers(); }, fin);
+  box.append(chk('Sombra', sh.on, v => setSh(s => { s.on = v; })));
+  if (sh.on) {
+    box.append(el('div', { class: 'row wrap', style: { gap: '4px' } }, ...Object.entries(SHADOW_PRESETS).map(([n, pr]) =>
+      el('button', { class: 'btn sm', onclick: () => setSh(s => Object.assign(s, pr)) }, n))));
+    const [ro, oo] = range(0.05, 1, 0.05, sh.opacity ?? 0.6, live('opacity'), v => Math.round(v * 100) + '%');
+    const [rd, od] = range(0, 5, 0.05, sh.dist ?? 0.5, live('dist'), v => v.toFixed(2) + ' %');
+    const [ra, oa] = range(0, 355, 5, sh.angle ?? 45, live('angle'), v => v + '°');
+    const [rb, ob] = range(0, 3, 0.05, sh.blur ?? 0.5, live('blur'), v => v.toFixed(2) + ' %');
+    box.append(
+      el('div', { class: 'grid2' }, field('Color', color(sh.color || '#000000', (v, fin) => liveEdit(() => { it.shadow.color = v; syncLayers(); }, fin))),
+        el('label', { class: 'f' }, el('span', {}, 'Opacidad: ', oo), ro)),
+      el('label', { class: 'f' }, el('span', {}, 'Distancia: ', od), rd),
+      el('label', { class: 'f' }, el('span', {}, 'Ángulo: ', oa, el('span', { class: 'muted' }, ' (45° = abajo a la derecha)')), ra),
+      el('label', { class: 'f' }, el('span', {}, 'Desenfoque: ', ob), rb),
+      el('div', { class: 'hint' }, 'Distancia y desenfoque en % del ancho del video: se ven igual en la vista previa y en cualquier resolución de exportación.'));
+  }
+  return box;
+}
 /* ================================================================= Inspector */
 function field(label, input, hint) { return el('label', { class: 'f' }, el('span', {}, label), input, hint ? el('span', { class: 'hint' }, hint) : null); }
 function num(val, step, onchange, attrs = {}) {
@@ -1082,6 +1122,7 @@ function renderInspector() {
         el('button', { class: 'btn sm', onclick: () => upd(d => { const o = d.overlays.find(x => x.id === it.id); o.y = (1 - (o.h || 0.1)) / 2; }, true) }, 'Centrar V'),
         el('button', { class: 'btn sm', onclick: () => upd(d => { const o = d.overlays.find(x => x.id === it.id); o.y = 1 - (o.h || 0.1) - 0.06; }, true) }, 'Abajo')),
       el('label', { class: 'f' }, el('span', {}, 'Opacidad'), range(0.1, 1, 0.05, it.opacity ?? 1, (v, fin) => { liveEdit(() => { it.opacity = v; }, fin); S.layerEls[it.id].style.opacity = v; })[0]),
+      shadowSection(it),
       field('Fundido de entrada/salida (s)', num(it.fade ?? 0.25, 0.05, v => upd(d => { d.overlays.find(x => x.id === it.id).fade = clamp(v, 0, 2); }), { min: 0, max: 2 })),
       el('div', { class: 'row wrap', style: { gap: '4px' } },
         el('button', { class: 'btn sm', title: 'Subir por encima de la siguiente capa de este tramo', onclick: () => moveLayer(it.id, 1) }, '⬆ Subir una capa'),
