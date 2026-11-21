@@ -152,7 +152,8 @@ def do_bgremove(job, prog: Progress) -> dict:
               "VALUES (?,?,?,?,?)", m["id"], tr["language"], db.jdump(words),
               db.jdump(cut(tl)) if isinstance(tl, list) else None, db.now())
     return {"media": m["id"], "file": out.name, "alpha": alpha, "source_id": src["id"],
-            "start": t0, "end": t1, "target": params.get("target"), "item_id": params.get("item_id")}
+            "start": t0, "end": t1, "target": params.get("target"), "item_id": params.get("item_id"),
+            "placement": params.get("placement", "replace")}
 
 
 def do_render(job, prog: Progress) -> dict:

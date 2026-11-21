@@ -270,7 +270,13 @@
     <div class="dlg-b">
       <p class="small" style="margin:0" id="bgIntro"></p>
       <p class="muted small" style="margin:0">Recorta a la persona con inteligencia artificial (modelo Robust Video Matting). Funciona mejor con una persona de frente a la cámara, buena iluminación y un fondo que no se mueva.</p>
-      <label class="f"><span>Fondo nuevo</span>
+      <label class="f" id="bgPlaceRow"><span>Resultado</span>
+        <select name="placement">
+          <option value="layer">Copiar como capa encima del clip (persona recortada, transparente)</option>
+          <option value="replace">Reemplazar el clip por la versión con fondo nuevo</option>
+        </select></label>
+      <p class="muted small" style="margin:0" id="bgPlaceHint">El clip original queda abajo y la persona recortada encima, en el mismo lugar y tamaño. Luego puede poner videos, imágenes o textos <b>entre</b> ambos con «⬆ Subir / ⬇ Bajar una capa» del inspector.</p>
+      <label class="f" id="bgModeRow"><span>Fondo nuevo</span>
         <select name="mode">
           <option value="transparent">Transparente: para superponer (⧉) sobre diapositivas o pantalla</option>
           <option value="color">Color sólido</option>

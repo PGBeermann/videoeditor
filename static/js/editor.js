@@ -773,7 +773,8 @@ function renderTimeline() {
   // capas (con carriles cuando se superponen)
   const ovl = laneItems(D().overlays);
   setTrackLanes(tracks.overlays, ovl[0]?.lanes || 1);
-  ovl.forEach(({ it, lane, lanes }) => { const d = spanItem('overlay', it, layerLabel(it), lane, lanes); if (it.type === 'media') d.classList.add('media'); tracks.overlays.appendChild(d); });
+  const zIdx = new Map(D().overlays.map((o, i) => [o.id, i + 1]));   // 1 = más abajo
+  ovl.forEach(({ it, lane, lanes }) => { const d = spanItem('overlay', it, (D().overlays.length > 1 ? `${zIdx.get(it.id)}· ` : '') + layerLabel(it), lane, lanes); if (it.type === 'media') d.classList.add('media'); tracks.overlays.appendChild(d); });
   const zl = laneItems(D().zooms);
   setTrackLanes(tracks.zooms, zl[0]?.lanes || 1);
   zl.forEach(({ it, lane, lanes }) => tracks.zooms.appendChild(spanItem('zoom', it, `Zoom ${it.scale.toFixed(1)}×`, lane, lanes)));
@@ -1083,9 +1084,13 @@ function renderInspector() {
       el('label', { class: 'f' }, el('span', {}, 'Opacidad'), range(0.1, 1, 0.05, it.opacity ?? 1, (v, fin) => { liveEdit(() => { it.opacity = v; }, fin); S.layerEls[it.id].style.opacity = v; })[0]),
       field('Fundido de entrada/salida (s)', num(it.fade ?? 0.25, 0.05, v => upd(d => { d.overlays.find(x => x.id === it.id).fade = clamp(v, 0, 2); }), { min: 0, max: 2 })),
       el('div', { class: 'row wrap', style: { gap: '4px' } },
-        el('button', { class: 'btn sm', title: 'Poner encima de las demás capas', onclick: () => upd(d => { const i = d.overlays.findIndex(x => x.id === it.id); d.overlays.push(d.overlays.splice(i, 1)[0]); }, true) }, '⬆ Al frente'),
-        el('button', { class: 'btn sm', title: 'Poner debajo de las demás capas', onclick: () => upd(d => { const i = d.overlays.findIndex(x => x.id === it.id); d.overlays.unshift(d.overlays.splice(i, 1)[0]); }, true) }, '⬇ Al fondo'),
+        el('button', { class: 'btn sm', title: 'Subir por encima de la siguiente capa de este tramo', onclick: () => moveLayer(it.id, 1) }, '⬆ Subir una capa'),
+        el('button', { class: 'btn sm', title: 'Bajar por debajo de la capa anterior de este tramo (p. ej., para ponerla entre el fondo y la persona recortada)', onclick: () => moveLayer(it.id, -1) }, '⬇ Bajar una capa')),
+      el('div', { class: 'row wrap', style: { gap: '4px' } },
+        el('button', { class: 'btn sm', title: 'Poner encima de las demás capas', onclick: () => upd(d => { const i = d.overlays.findIndex(x => x.id === it.id); d.overlays.push(d.overlays.splice(i, 1)[0]); }, true) }, '⏫ Al frente'),
+        el('button', { class: 'btn sm', title: 'Poner debajo de las demás capas', onclick: () => upd(d => { const i = d.overlays.findIndex(x => x.id === it.id); d.overlays.unshift(d.overlays.splice(i, 1)[0]); }, true) }, '⏬ Al fondo'),
         el('button', { class: 'btn sm', onclick: () => splitAt(S.t) }, '✂ Dividir')),
+      (() => { const { pos, total } = layerOrder(it); return el('div', { class: 'hint' }, total > 1 ? `Orden en este tramo: capa ${pos} de ${total} (1 = más abajo, justo sobre el video principal; ${total} = al frente).` : 'Es la única capa en este tramo.'); })(),
       el('div', { class: 'row' },
         el('button', { class: 'btn sm', onclick: () => { const copy = JSON.parse(JSON.stringify(it)); copy.id = uid(); copy.start = S.t; copy.end = S.t + (it.end - it.start); change(d => d.overlays.push(copy)); select('overlay', copy.id); } }, 'Duplicar en cabezal'),
         el('button', { class: 'btn sm danger', onclick: deleteSelected }, 'Eliminar')));
@@ -1349,6 +1354,29 @@ $('#btnSilences').onclick = () => {
   seek(Math.min(S.t, duration()));
 };
 /* ================================================================= Quitar el fondo de un video */
+/* Rectángulo (fracciones del cuadro) que ocupa un medio en la pista principal según su encuadre:
+   así la capa copiada queda exactamente encima del clip (igual que en el render, scale+pad/crop). */
+function fitRect(m, fit) {
+  const mw = m.width || W0(), mh = m.height || H0();
+  const k = fit === 'cover' ? Math.max(W0() / mw, H0() / mh) : Math.min(W0() / mw, H0() / mh);
+  const w = mw * k / W0(), h = mh * k / H0();
+  return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+}
+/* Orden de las capas: la última de la lista se dibuja encima. «Subir/Bajar» salta a la siguiente
+   capa que coincide en el tiempo, para poder intercalar un video entre otras dos capas. */
+function moveLayer(id, dir) {
+  const L = D().overlays, i = L.findIndex(x => x.id === id); if (i < 0) return;
+  const o = L[i], overl = x => x.start < o.end && x.end > o.start;
+  let j = i + dir;
+  while (j >= 0 && j < L.length && !overl(L[j])) j += dir;
+  if (j < 0 || j >= L.length) { toast(dir > 0 ? 'Ya está encima de las capas de ese tramo' : 'Ya está debajo de las capas de ese tramo (sobre el video principal)'); return; }
+  change(d => { const [x] = d.overlays.splice(i, 1); d.overlays.splice(j, 0, x); });
+  renderInspector();
+}
+function layerOrder(o) {
+  const same = D().overlays.filter(x => x.start < o.end && x.end > o.start);
+  return { pos: same.indexOf(o) + 1, total: same.length };
+}
 function bgButton(m, seg) {
   const busy = S.jobs.find(j => j.type === 'bgremove' && (j.status === 'queued' || j.status === 'running') && j.params?.item_id === seg.itemId);
   if (busy) return el('div', { class: 'hint', style: { color: 'var(--amber)' } }, busy.status === 'running' ? `👤 Quitando el fondo… ${Math.round(busy.progress * 100)}%` : '👤 Quitar fondo: en cola');
@@ -1362,6 +1390,8 @@ function removeBgDialog(m, seg = null) {
     ? `Se procesa solo el tramo ${fmtTime(seg.start)}–${fmtTime(seg.end)} del original y, al terminar, el ${seg.target === 'overlay' ? 'video superpuesto' : 'clip'} se reemplaza en su mismo lugar (Ctrl+Z lo revierte). El video original no cambia.`
     : 'Crea un video nuevo en la biblioteca con la persona recortada; el original no cambia.';
   f.mode.value = seg && seg.target === 'clip' ? 'blur' : 'transparent';
+  f.placement.value = 'layer';
+  $('#bgPlaceRow').classList.toggle('hidden', !(seg && seg.target === 'clip'));
   f.mode.querySelector('[value="transparent"]').textContent = seg && seg.target === 'clip'
     ? 'Transparente (en la pista «Video» se verá negro; útil en capas ⧉)' : 'Transparente: para superponer (⧉) sobre diapositivas o pantalla';
   const imgs = Object.values(S.media).filter(x => x.kind === 'image' && x.status === 'ready');
@@ -1371,7 +1401,10 @@ function removeBgDialog(m, seg = null) {
   f.max_height.querySelector('[value="1080"]').disabled = (m.height || 0) < 1000;
   if (f.max_height.value === '1080' && (m.height || 0) < 1000) f.max_height.value = '720';
   const sync = () => {
-    $$('#dlgBg .bg-opt').forEach(n => n.classList.toggle('hidden', n.dataset.for !== f.mode.value));
+    const asLayer = seg && seg.target === 'clip' && f.placement.value === 'layer';
+    $('#bgPlaceHint').classList.toggle('hidden', !asLayer);
+    $('#bgModeRow').classList.toggle('hidden', asLayer);
+    $$('#dlgBg .bg-opt').forEach(n => n.classList.toggle('hidden', asLayer || n.dataset.for !== f.mode.value));
     $('#bgBlurV').textContent = f.blur.value;
     // Referencia medida: ≈8 cuadros/s (rápida) y ≈4,5 cuadros/s (normal) a 720p con 2 vCPU
     const fpsProc = f.quality.value === 'rapida' ? 8 : 4.5, frames = segLen * Math.min(m.fps || 30, 60);
@@ -1384,11 +1417,12 @@ function removeBgDialog(m, seg = null) {
     e.preventDefault();
     const body = { mode: f.mode.value, color: f.color.value, blur: +f.blur.value, max_height: +f.max_height.value, quality: f.quality.value };
     if (seg) Object.assign(body, { start: seg.start, end: seg.end, target: seg.target, item_id: seg.itemId });
+    if (seg && seg.target === 'clip') { body.placement = f.placement.value; if (body.placement === 'layer') body.mode = 'transparent'; }
     if (body.mode === 'image') { if (!sel.value) { toast('Suba primero una imagen a la biblioteca', true); return; } body.image_media_id = sel.value; }
     try {
       const r = await API.post(`/api/media/${m.id}/remove-bg`, body);
       dlg.close();
-      toast(seg ? 'Quitando el fondo en el servidor. El clip se reemplazará solo al terminar; puede seguir editando.' : 'Quitando el fondo en el servidor. El video nuevo aparecerá en la biblioteca.', false, 6000);
+      toast(seg ? (body.placement === 'layer' ? 'Quitando el fondo en el servidor. Al terminar, la persona recortada se añadirá como capa encima del clip.' : 'Quitando el fondo en el servidor. El clip se reemplazará solo al terminar; puede seguir editando.') : 'Quitando el fondo en el servidor. El video nuevo aparecerá en la biblioteca.', false, 6000);
       const list = await API.get(`/api/projects/${PID}/media`);
       list.forEach(x => { if (!S.media[x.id]) S.media[x.id] = x; });
       renderMedia(); pollJobs();
@@ -1417,6 +1451,19 @@ function applyBgSwaps() {
         o.params.media_id = r.media; o.in = Math.max(0, (o.in || 0) - r.start); n++;
       }
     };
+    if (r.placement === 'layer' && r.target === 'clip') {
+      // Copia la persona recortada como capa encima de cada clip de ese tramo, alineada con él
+      const adds = segments().filter(sg => sg.clip.media_id === r.source_id && inside(sg.clip.in, sg.clip.out))
+        .map(sg => ({ id: uid(), type: 'media', params: { media_id: r.media }, start: sg.start, end: sg.end,
+                      in: Math.max(0, sg.clip.in - r.start), ...fitRect(nm, sg.clip.fit), opacity: 1, fade: 0, volume: 1, mute: true }));
+      if (adds.length) {
+        change(d => { d.overlays.push(...adds); });
+        select('overlay', adds[adds.length - 1].id);
+        toast(`Fondo quitado: la persona recortada se añadió como capa encima del clip (${adds.length === 1 ? '1 capa' : adds.length + ' capas'}). Use «⬇ Bajar una capa» en otras capas para colocarlas entre ambos.`, false, 8000);
+      } else toast('Fondo quitado. El clip ya no está en la línea de tiempo: el video sin fondo quedó en la biblioteca.', false, 7000);
+      API.post(`/api/jobs/${j.id}/applied`).catch(() => { });
+      continue;
+    }
     const probe = JSON.parse(JSON.stringify(D())); doSwap(probe);
     if (n) { n = 0; change(doSwap); computeWords(); toast(`Fondo quitado: ${n === 1 ? 'el clip se reemplazó' : n + ' clips se reemplazaron'} en la línea de tiempo (Ctrl+Z para revertir).`, false, 7000); }
     else toast('Fondo quitado. El clip original ya no está en la línea de tiempo: el video nuevo quedó en la biblioteca.', false, 7000);

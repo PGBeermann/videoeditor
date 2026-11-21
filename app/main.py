@@ -538,6 +538,8 @@ class RemoveBgIn(BaseModel):
     end: float | None = Field(None, gt=0)
     target: str | None = Field(None, pattern="^(clip|overlay)$")
     item_id: str | None = Field(None, max_length=64)
+    # Con un clip: «layer» copia la persona recortada como capa encima; «replace» reemplaza el clip
+    placement: str = Field("replace", pattern="^(replace|layer)$")
 
 
 def _fmt_s(t: float) -> str:
@@ -555,6 +557,8 @@ def media_remove_bg(mid: str, body: RemoveBgIn, user=Depends(current_user)):
                     body.image_media_id or "", m["project_id"])
         if not img:
             raise HTTPException(400, "Elija una imagen de la biblioteca del proyecto como fondo")
+    if body.placement == "layer":
+        body.mode = "transparent"          # una capa encima solo tiene sentido sin fondo
     stem = Path(m["filename"]).stem[:100]
     label = {"transparent": "sin fondo", "color": "fondo de color", "blur": "fondo desenfocado",
              "image": "fondo de imagen"}[body.mode]
